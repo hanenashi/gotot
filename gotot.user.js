@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Adds a "Go To Date" navigation to the top pager on Okoun.cz (Bidirectional + Future Fix)
+// @version      1.3
+// @description  Adds a "Go To Date" navigation to the top pager on Okoun.cz (Loop Protected)
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
 // @grant        GM_addStyle
@@ -82,19 +82,21 @@
         let targetTs = new Date(targetDateStr).getTime();
         if (isNaN(targetTs)) return;
 
-        // FIX V1.2: Future Clamp
-        // If target is in the future, clamp to NOW to avoid infinite "Newer" loops
+        // Clamp future dates to Now
         const now = Date.now();
-        if (targetTs > now) {
-            console.log("GoToT: Future date detected, clamping to Now.");
-            targetTs = now;
-        }
+        if (targetTs > now) targetTs = now;
 
         const input = document.querySelector('.goto-input');
         input.classList.add('scanning');
         input.disabled = true;
 
+        // V1.3: Track visited URLs to prevent loops
+        const visited = new Set();
         let currentUrl = window.location.href;
+        
+        // Normalize URL for set storage (remove hash to be safe)
+        visited.add(currentUrl.split('#')[0]);
+
         let found = false;
         let hops = 0;
         const MAX_HOPS = 40; 
@@ -185,17 +187,21 @@
 
                 // Execute Jump
                 if (bestLink) {
-                    // FIX V1.2: Infinite Loop Guard
-                    // If the best link is the page we are already scanning, we are stuck. Stop.
-                    if (bestLink === currentUrl || bestLink.includes(window.location.search)) {
-                         console.log("GoToT: Loop detected (best link is current). Stopping.");
-                         window.location.href = currentUrl;
-                         found = true;
-                         break;
+                    // V1.3: Loop Guard
+                    // If we are about to visit a URL we've already seen, or stay on same page, STOP.
+                    const cleanLink = bestLink.split('#')[0];
+                    if (visited.has(cleanLink) || bestLink === currentUrl) {
+                        // We are stuck or looping. Load what we have.
+                        window.location.href = currentUrl;
+                        found = true;
+                        break;
                     }
+
+                    visited.add(cleanLink);
                     currentUrl = bestLink;
                 } else {
-                    // Dead end (No newer/older link found) -> We are at the limit.
+                    // Dead end - we can't move further in the desired direction.
+                    // This happens if we want to go "Newer" but we are at "Nejnovější".
                     window.location.href = currentUrl;
                     found = true;
                     break;
@@ -208,10 +214,9 @@
             if (!found) {
                 input.classList.remove('scanning');
                 input.disabled = false;
-                // If we ran out of hops, just load where we ended up
                 if (hops >= MAX_HOPS) {
-                    // alert("Nenalezeno (příliš daleko)."); // Optional: Silent fail is better
-                    window.location.href = currentUrl; 
+                    // Safety timeout - just load where we ended up
+                    window.location.href = currentUrl;
                 }
             }
         }
