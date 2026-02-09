@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  Adds a "Go To Date" navigation to the top pager on Okoun.cz (Bidirectional)
+// @version      1.2
+// @description  Adds a "Go To Date" navigation to the top pager on Okoun.cz (Bidirectional + Future Fix)
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
 // @grant        GM_addStyle
@@ -79,8 +79,16 @@
 
     // --- Bidirectional Scanning Logic ---
     async function performScan(targetDateStr) {
-        const targetTs = new Date(targetDateStr).getTime();
+        let targetTs = new Date(targetDateStr).getTime();
         if (isNaN(targetTs)) return;
+
+        // FIX V1.2: Future Clamp
+        // If target is in the future, clamp to NOW to avoid infinite "Newer" loops
+        const now = Date.now();
+        if (targetTs > now) {
+            console.log("GoToT: Future date detected, clamping to Now.");
+            targetTs = now;
+        }
 
         const input = document.querySelector('.goto-input');
         input.classList.add('scanning');
@@ -175,9 +183,19 @@
                     }
                 }
 
+                // Execute Jump
                 if (bestLink) {
+                    // FIX V1.2: Infinite Loop Guard
+                    // If the best link is the page we are already scanning, we are stuck. Stop.
+                    if (bestLink === currentUrl || bestLink.includes(window.location.search)) {
+                         console.log("GoToT: Loop detected (best link is current). Stopping.");
+                         window.location.href = currentUrl;
+                         found = true;
+                         break;
+                    }
                     currentUrl = bestLink;
                 } else {
+                    // Dead end (No newer/older link found) -> We are at the limit.
                     window.location.href = currentUrl;
                     found = true;
                     break;
@@ -190,7 +208,11 @@
             if (!found) {
                 input.classList.remove('scanning');
                 input.disabled = false;
-                if (hops >= MAX_HOPS) alert("Nenalezeno (příliš daleko).");
+                // If we ran out of hops, just load where we ended up
+                if (hops >= MAX_HOPS) {
+                    // alert("Nenalezeno (příliš daleko)."); // Optional: Silent fail is better
+                    window.location.href = currentUrl; 
+                }
             }
         }
     }
