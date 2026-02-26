@@ -1,11 +1,14 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  Adds a "Go To Date" navigation to the top pager on Okoun.cz (Loop Protected)
+// @version      1.6.2
+// @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a Hyena.cz news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
 // @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @connect      hyena.cz
+// @connect      www.hyena.cz
 // @homepageURL  https://github.com/hanenashi/gotot
 // @supportURL   https://github.com/hanenashi/gotot/issues
 // @updateURL    https://github.com/hanenashi/gotot/raw/main/gotot.user.js
@@ -18,39 +21,49 @@
     // 1. Styles
     GM_addStyle(`
         li.goto-nav-item {
-            display: inline-flex;
-            align-items: center;
-            margin-right: 10px;
-            vertical-align: middle;
+            display: inline-flex; align-items: center; margin-right: 10px;
+            vertical-align: middle; position: relative; top: -2px;
         }
         .goto-input {
-            background: #222;
-            border: 1px solid #444;
-            color: #ddd;
-            font-family: Arial, sans-serif;
-            font-size: 11px;
-            padding: 2px 4px;
-            border-radius: 3px;
-            outline: none;
-            width: 115px;
+            background: #222; border: 1px solid #444; color: #ddd;
+            font-family: Arial, sans-serif; font-size: 11px;
+            padding: 2px 4px; border-radius: 3px; outline: none; width: 115px;
         }
         .goto-input:focus { border-color: #d35400; color: #fff; }
         .goto-input.scanning { background: #331a00; border-color: #d35400; cursor: wait; }
         
         .goto-btn {
-            background: transparent;
-            border: none;
-            color: #777;
-            cursor: pointer;
-            font-size: 12px;
-            padding: 2px 5px;
-            margin-left: 2px;
+            background: transparent; border: none; color: #777;
+            cursor: pointer; font-size: 12px; padding: 2px 5px; margin-left: 2px;
         }
         .goto-btn:hover { color: #d35400; }
 
-        @media (max-width: 600px) {
-            .goto-input { width: 90px; }
+        /* --- Overlay Styles --- */
+        #gotot-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(8px);
+            z-index: 999999; display: flex; align-items: center; justify-content: center;
+            font-family: Arial, sans-serif;
         }
+        #gotot-modal {
+            background: #1a1a1a; border: 2px solid #d35400; border-radius: 6px;
+            width: 90%; max-width: 550px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            color: #ccc;
+        }
+        .gotot-modal-title { margin: 0 0 15px 0; color: #d35400; font-size: 18px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        #gotot-hyena-date { color: #888; font-size: 12px; float: right; margin-top: 4px; }
+        #gotot-hyena-content { min-height: 100px; font-size: 13px; line-height: 1.6; }
+        .gotot-hyena-list { list-style-type: square; padding-left: 20px; margin: 0; color: #bbb; }
+        .gotot-hyena-list li { margin-bottom: 6px; }
+        #gotot-status-text { margin-top: 20px; font-weight: bold; text-align: center; color: #fff; }
+        .gotot-buttons { display: flex; gap: 10px; margin-top: 15px; }
+        .gotot-action-btn { flex: 1; padding: 10px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+        #gotot-cancel-btn { background: #444; color: #fff; }
+        #gotot-cancel-btn:hover { background: #555; }
+        #gotot-continue-btn { background: #d35400; color: #fff; display: none; }
+        #gotot-continue-btn:hover { background: #e67e22; }
+
+        @media (max-width: 600px) { .goto-input { width: 90px; } }
     `);
 
     // --- Helpers ---
@@ -71,10 +84,102 @@
 
     function parseUrlDate(url) {
         const match = url.match(/[?&]f=(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
-        if (match) {
-            return new Date(match[1], match[2]-1, match[3], match[4], match[5], match[6]).getTime();
-        }
+        if (match) return new Date(match[1], match[2]-1, match[3], match[4], match[5], match[6]).getTime();
         return null;
+    }
+
+    // --- UI Management ---
+    let overlayEl = null;
+    let cancelRequested = false;
+
+    function createOverlay(targetDateStr) {
+        if (overlayEl) return;
+        cancelRequested = false;
+        
+        overlayEl = document.createElement('div');
+        overlayEl.id = 'gotot-overlay';
+        overlayEl.innerHTML = '<div id="gotot-modal"><h3 class="gotot-modal-title">Stroj času GoToT <span id="gotot-hyena-date">' + targetDateStr + '</span></h3><div id="gotot-hyena-content"><i>Navazuji spojení s Hyena.cz...</i></div><div id="gotot-status-text">Připravuji skok v čase...</div><div class="gotot-buttons"><button id="gotot-cancel-btn" class="gotot-action-btn">Zrušit skok</button><button id="gotot-continue-btn" class="gotot-action-btn">Přejít na datum</button></div></div>';
+        document.body.appendChild(overlayEl);
+
+        document.getElementById('gotot-cancel-btn').addEventListener('click', () => {
+            cancelRequested = true;
+            closeOverlay();
+        });
+    }
+
+    function closeOverlay() {
+        if (overlayEl) {
+            overlayEl.remove();
+            overlayEl = null;
+        }
+        document.querySelectorAll('.goto-input').forEach(input => {
+            input.classList.remove('scanning');
+            input.disabled = false;
+        });
+    }
+
+    function updateStatus(textHtml) {
+        const statusEl = document.getElementById('gotot-status-text');
+        if (statusEl) statusEl.innerHTML = textHtml;
+    }
+
+    // --- Data Fetching ---
+    function fetchHyenaNews(targetDateStr) {
+        const d = new Date(targetDateStr);
+        const yy = String(d.getFullYear()).slice(-2);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const archiveUrl = "https://www.hyena.cz/" + yy + "/" + mm + "/" + yy + mm + dd + "pes.html";
+
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: archiveUrl,
+            overrideMimeType: "text/html; charset=windows-1250",
+            onload: function(response) {
+                const contentEl = document.getElementById('gotot-hyena-content');
+                if (!contentEl) return;
+
+                const html = response.responseText;
+
+                if (response.status === 404 || html.includes("<title>404")) {
+                    contentEl.innerHTML = "<i>Ondřej Neff tento den (" + targetDateStr + ") Hyenu nevydal.</i>";
+                    return;
+                }
+
+                try {
+                    const tStart = "<" + "!--";
+                    const tEnd = "--" + ">";
+                    const pat = tStart + "[^>]*odsud[^>]*" + tEnd + "([\\s\\S]*?)(?:<\\/ul>|<br[^>]*>\\s*<br[^>]*>\\s*<i|<p>|" + tStart + ")";
+                    const regex = new RegExp(pat, "i");
+                    const match = html.match(regex);
+                    
+                    if (match && match[1]) {
+                        const rawItems = match[1].split(/<li[^>]*>/i);
+                        const cleanItems = rawItems
+                            .map(item => item.replace(/<[^>]*>?/gm, '').trim())
+                            .filter(item => item.length > 0);
+
+                        if (cleanItems.length > 0) {
+                            let listHtml = '<ul class="gotot-hyena-list">';
+                            cleanItems.forEach(item => { listHtml += "<li>" + item + "</li>"; });
+                            listHtml += '</ul>';
+                            contentEl.innerHTML = listHtml;
+                        } else {
+                            contentEl.innerHTML = "<i>Dnes nebyly nalezeny žádné zprávy.</i>";
+                        }
+                    } else {
+                        contentEl.innerHTML = "<i>Zprávy z Hyeny se nepodařilo rozluštit.</i>";
+                    }
+                } catch (e) {
+                    contentEl.innerHTML = "<i>Chyba při zpracování Hyeny.</i>";
+                    console.error("GoToT Error: ", e);
+                }
+            },
+            onerror: function() {
+                const contentEl = document.getElementById('gotot-hyena-content');
+                if (contentEl) contentEl.innerHTML = "<i>Spojení s Hyenou selhalo.</i>";
+            }
+        });
     }
 
     // --- Bidirectional Scanning Logic ---
@@ -82,34 +187,39 @@
         let targetTs = new Date(targetDateStr).getTime();
         if (isNaN(targetTs)) return;
 
-        // Clamp future dates to Now
         const now = Date.now();
         if (targetTs > now) targetTs = now;
 
-        const input = document.querySelector('.goto-input');
-        input.classList.add('scanning');
-        input.disabled = true;
+        document.querySelectorAll('.goto-input').forEach(input => {
+            input.classList.add('scanning');
+            input.disabled = true;
+        });
 
-        // V1.3: Track visited URLs to prevent loops
+        createOverlay(targetDateStr);
+        fetchHyenaNews(targetDateStr);
+
         const visited = new Set();
         let currentUrl = window.location.href;
-        
-        // Normalize URL for set storage (remove hash to be safe)
         visited.add(currentUrl.split('#')[0]);
 
-        let found = false;
+        let finalUrl = null;
         let hops = 0;
         const MAX_HOPS = 40; 
+        
+        // Track the oldest and newest items seen on the last checked page
+        let finalOldest = 0;
+        let finalNewest = 0;
 
         try {
-            while (hops < MAX_HOPS && !found) {
+            while (hops < MAX_HOPS && !finalUrl && !cancelRequested) {
                 hops++;
+                updateStatus("Skenuji okoun.cz... (Krok " + hops + ")");
+                
                 const response = await fetch(currentUrl);
                 const text = await response.text();
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(text, 'text/html');
 
-                // 1. Analyze Current Page Range
                 let newest = 0;
                 let oldest = 0;
                 const items = doc.querySelectorAll('.listing .item');
@@ -124,39 +234,28 @@
                         }
                     }
                 });
+                
+                finalOldest = oldest;
+                finalNewest = newest;
 
-                if (items.length === 0) {
-                    found = true;
+                if (items.length === 0 || (targetTs <= newest && targetTs >= oldest)) {
+                    finalUrl = currentUrl;
                     break;
                 }
 
-                // 2. CHECK: Are we there?
-                if (targetTs <= newest && targetTs >= oldest) {
-                    window.location.href = currentUrl;
-                    found = true;
-                    break;
-                }
-
-                // 3. Determine Direction
                 let direction = ''; 
-                if (oldest > targetTs) {
-                    direction = 'older'; 
-                } else if (newest < targetTs) {
-                    direction = 'newer'; 
-                }
+                if (oldest > targetTs) direction = 'older'; 
+                else if (newest < targetTs) direction = 'newer'; 
 
-                // 4. Find Best Link
                 const pagerLinks = Array.from(doc.querySelectorAll('.pager a'));
                 let bestLink = null;
                 let bestDiff = Infinity;
 
                 pagerLinks.forEach(link => {
                     let linkTs = parseUrlDate(link.href);
-                    
                     if (!linkTs && (link.classList.contains('newest') || link.innerText.includes('Nejnovější'))) {
                         linkTs = Date.now(); 
                     }
-
                     if (linkTs) {
                         let isValidCandidate = false;
                         if (direction === 'older' && linkTs < oldest) isValidCandidate = true;
@@ -172,60 +271,60 @@
                     }
                 });
 
-                // Fallback buttons
                 if (!bestLink) {
                     if (direction === 'older') {
-                        const olderBtn = doc.querySelector('.pager .older a') || 
-                                         pagerLinks.find(l => l.innerText.includes('Starší') || l.innerText.trim() === '>');
+                        const olderBtn = doc.querySelector('.pager .older a') || pagerLinks.find(l => l.innerText.includes('Starší') || l.innerText.trim() === '>');
                         if (olderBtn) bestLink = olderBtn.href;
                     } else if (direction === 'newer') {
-                        const newerBtn = doc.querySelector('.pager .newer a') || 
-                                         pagerLinks.find(l => l.innerText.includes('Novější') || l.innerText.trim() === '<');
+                        const newerBtn = doc.querySelector('.pager .newer a') || pagerLinks.find(l => l.innerText.includes('Novější') || l.innerText.trim() === '<');
                         if (newerBtn) bestLink = newerBtn.href;
                     }
                 }
 
-                // Execute Jump
                 if (bestLink) {
-                    // V1.3: Loop Guard
-                    // If we are about to visit a URL we've already seen, or stay on same page, STOP.
                     const cleanLink = bestLink.split('#')[0];
                     if (visited.has(cleanLink) || bestLink === currentUrl) {
-                        // We are stuck or looping. Load what we have.
-                        window.location.href = currentUrl;
-                        found = true;
+                        finalUrl = currentUrl;
                         break;
                     }
-
                     visited.add(cleanLink);
                     currentUrl = bestLink;
                 } else {
-                    // Dead end - we can't move further in the desired direction.
-                    // This happens if we want to go "Newer" but we are at "Nejnovější".
-                    window.location.href = currentUrl;
-                    found = true;
+                    finalUrl = currentUrl;
                     break;
                 }
             }
         } catch (e) {
             console.error("GoToT Error", e);
-            alert("Chyba při hledání data.");
-        } finally {
-            if (!found) {
-                input.classList.remove('scanning');
-                input.disabled = false;
-                if (hops >= MAX_HOPS) {
-                    // Safety timeout - just load where we ended up
-                    window.location.href = currentUrl;
-                }
+            updateStatus('<span style="color: #f39c12;">Chyba sítě při hledání data.</span>');
+            finalUrl = currentUrl; // Fallback
+        }
+
+        if (!cancelRequested) {
+            // Check if we bottomed out before reaching the target date
+            if (targetTs < finalOldest && finalOldest > 0) {
+                updateStatus('<span style="color: #f39c12;">Klub v této době ještě neexistoval. Nastavuji nejstarší dostupnou stránku.</span>');
+            } else if (targetTs > finalNewest && finalNewest > 0 && hops > 1) {
+                updateStatus('<span style="color: #f39c12;">Novější zprávy nebyly nalezeny. Nastavuji nejnovější dostupnou stránku.</span>');
+            } else {
+                updateStatus("Časový skok připraven!");
             }
+            
+            const continueBtn = document.getElementById('gotot-continue-btn');
+            const cancelBtn = document.getElementById('gotot-cancel-btn');
+            
+            if (continueBtn) {
+                continueBtn.style.display = 'block';
+                continueBtn.onclick = () => { window.location.href = finalUrl || currentUrl; };
+            }
+            if (cancelBtn) cancelBtn.innerText = "Zavřít";
         }
     }
 
     // --- Init ---
     function init() {
-        const topPagerNav = document.querySelector('.pager-top .pager .nav');
-        if (topPagerNav) {
+        const pagerNavs = document.querySelectorAll('.pager > ul.nav:first-of-type');
+        pagerNavs.forEach(nav => {
             const li = document.createElement('li');
             li.className = 'goto-nav-item';
             
@@ -239,22 +338,15 @@
             btn.innerHTML = '🔍';
             btn.title = 'Hledat';
 
-            const go = () => {
-                if (input.value) performScan(input.value);
-            };
+            const go = () => { if (input.value) performScan(input.value); };
 
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') go();
-            });
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                go();
-            });
+            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+            btn.addEventListener('click', (e) => { e.preventDefault(); go(); });
 
             li.appendChild(input);
             li.appendChild(btn);
-            topPagerNav.insertBefore(li, topPagerNav.firstChild);
-        }
+            nav.insertBefore(li, nav.firstChild);
+        });
     }
 
     init();
