@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      1.6.2
+// @version      1.6.4
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a Hyena.cz news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -147,6 +147,7 @@
                 }
 
                 try {
+                    // Hidden HTML comment tags safely constructed
                     const tStart = "<" + "!--";
                     const tEnd = "--" + ">";
                     const pat = tStart + "[^>]*odsud[^>]*" + tEnd + "([\\s\\S]*?)(?:<\\/ul>|<br[^>]*>\\s*<br[^>]*>\\s*<i|<p>|" + tStart + ")";
@@ -204,11 +205,13 @@
 
         let finalUrl = null;
         let hops = 0;
-        const MAX_HOPS = 40; 
+        const MAX_HOPS = 150; 
         
-        // Track the oldest and newest items seen on the last checked page
         let finalOldest = 0;
         let finalNewest = 0;
+        let hitDeadEnd = false; 
+
+        const czDateFormatter = new Intl.DateTimeFormat('cs-CZ', { year: 'numeric', month: 'long', day: 'numeric' });
 
         try {
             while (hops < MAX_HOPS && !finalUrl && !cancelRequested) {
@@ -237,6 +240,11 @@
                 
                 finalOldest = oldest;
                 finalNewest = newest;
+
+                if (newest > 0) {
+                    const passingDateStr = czDateFormatter.format(new Date(newest));
+                    updateStatus("Skenuji okoun.cz... (Krok " + hops + ")<br><span style='color: #d35400; font-size: 14px;'>Míjím: " + passingDateStr + "</span>");
+                }
 
                 if (items.length === 0 || (targetTs <= newest && targetTs >= oldest)) {
                     finalUrl = currentUrl;
@@ -290,6 +298,7 @@
                     visited.add(cleanLink);
                     currentUrl = bestLink;
                 } else {
+                    hitDeadEnd = true; 
                     finalUrl = currentUrl;
                     break;
                 }
@@ -297,14 +306,15 @@
         } catch (e) {
             console.error("GoToT Error", e);
             updateStatus('<span style="color: #f39c12;">Chyba sítě při hledání data.</span>');
-            finalUrl = currentUrl; // Fallback
+            finalUrl = currentUrl; 
         }
 
         if (!cancelRequested) {
-            // Check if we bottomed out before reaching the target date
-            if (targetTs < finalOldest && finalOldest > 0) {
+            if (hops >= MAX_HOPS) {
+                updateStatus('<span style="color: #f39c12;">Dosažen limit vzdálenosti skoku (' + MAX_HOPS + ' kroků). Budete vysazeni na půli cesty.</span>');
+            } else if (hitDeadEnd && targetTs < finalOldest && finalOldest > 0) {
                 updateStatus('<span style="color: #f39c12;">Klub v této době ještě neexistoval. Nastavuji nejstarší dostupnou stránku.</span>');
-            } else if (targetTs > finalNewest && finalNewest > 0 && hops > 1) {
+            } else if (hitDeadEnd && targetTs > finalNewest && finalNewest > 0 && hops > 1) {
                 updateStatus('<span style="color: #f39c12;">Novější zprávy nebyly nalezeny. Nastavuji nejnovější dostupnou stránku.</span>');
             } else {
                 updateStatus("Časový skok připraven!");
