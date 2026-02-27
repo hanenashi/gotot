@@ -152,7 +152,7 @@
         }
 
         // Otherwise, fetch it from the GitHub repository
-        const archiveUrl = `https://raw.githubusercontent.com/hanenashi/gotot/main/hyena_${yyyy}.json`;
+        const archiveUrl = `https://raw.githubusercontent.com/hanenashi/gotot/main/db/hyena_${yyyy}.json`;
 
         GM_xmlhttpRequest({
             method: "GET",
