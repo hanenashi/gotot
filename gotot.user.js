@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      1.7.0
+// @version      1.7.1
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -87,6 +87,12 @@
         return null;
     }
 
+    function formatCzechDate(dateObj) {
+        let str = dateObj.toLocaleDateString('cs-CZ', { weekday: 'long', year: 'numeric', month: 'numeric', day: 'numeric' });
+        // Capitalize the first letter (e.g. "pondělí" -> "Pondělí")
+        return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+
     // --- UI Management ---
     let overlayEl = null;
     let cancelRequested = false;
@@ -95,9 +101,12 @@
         if (overlayEl) return;
         cancelRequested = false;
         
+        // Format the initial target date for the header
+        const initDisplay = formatCzechDate(new Date(targetDateStr));
+        
         overlayEl = document.createElement('div');
         overlayEl.id = 'gotot-overlay';
-        overlayEl.innerHTML = '<div id="gotot-modal"><h3 class="gotot-modal-title">Stroj času GoToT <span id="gotot-hyena-date">' + targetDateStr + '</span></h3><div id="gotot-hyena-content"><i>Načítám databázi zpráv...</i></div><div id="gotot-status-text">Připravuji skok v čase...</div><div class="gotot-buttons"><button id="gotot-cancel-btn" class="gotot-action-btn">Zrušit skok</button><button id="gotot-continue-btn" class="gotot-action-btn">Přejít na datum</button></div></div>';
+        overlayEl.innerHTML = '<div id="gotot-modal"><h3 class="gotot-modal-title">Stroj času GoToT <span id="gotot-hyena-date">' + initDisplay + '</span></h3><div id="gotot-hyena-content"><i>Načítám databázi zpráv...</i></div><div id="gotot-status-text">Připravuji skok v čase...</div><div class="gotot-buttons"><button id="gotot-cancel-btn" class="gotot-action-btn">Zrušit skok</button><button id="gotot-continue-btn" class="gotot-action-btn">Přejít na datum</button></div></div>';
         document.body.appendChild(overlayEl);
     }
 
@@ -118,52 +127,86 @@
     }
 
     // --- Data Fetching (JSON Database) ---
-    let hyenaDBCache = {}; // Cache downloaded years so we don't spam GitHub
+    let hyenaDBCache = {}; 
 
-    function fetchHyenaNews(targetDateStr) {
+    function fetchHyenaNews(targetDateStr, startTs) {
         const d = new Date(targetDateStr);
         const yyyy = d.getFullYear();
-        
-        // Build "YYYY-MM-DD" safely regardless of timezone
         const mm = String(d.getMonth() + 1).padStart(2, '0');
         const dd = String(d.getDate()).padStart(2, '0');
-        const searchKey = `${yyyy}-${mm}-${dd}`;
-
+        
         const contentEl = document.getElementById('gotot-hyena-content');
         if (!contentEl) return;
 
-        // Function to render the UI once we have the data
         const renderNews = (yearDB) => {
-            const newsItems = yearDB[searchKey];
+            let searchKey = `${yyyy}-${mm}-${dd}`;
+            let newsItems = yearDB[searchKey];
+            let foundKey = searchKey;
+
+            // If the exact date is missing, find the nearest available one
+            if (!newsItems) {
+                const targetTime = d.getTime();
+                let minDiff = Infinity;
+                let bestKey = null;
+
+                for (const key of Object.keys(yearDB)) {
+                    const kTime = new Date(key).getTime();
+                    const diff = Math.abs(kTime - targetTime);
+                    
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        bestKey = key;
+                    } else if (diff === minDiff && bestKey) {
+                        // TIE BREAKER: If distance is equal (e.g. Sat vs Mon), pick the one closer to the date we initiated the search from
+                        const diffStartK = Math.abs(kTime - startTs);
+                        const diffStartBest = Math.abs(new Date(bestKey).getTime() - startTs);
+                        if (diffStartK < diffStartBest) {
+                            bestKey = key;
+                        }
+                    }
+                }
+
+                if (bestKey) {
+                    newsItems = yearDB[bestKey];
+                    foundKey = bestKey;
+                }
+            }
+
+            // Update the UI header if we fell back to a different date
+            const dateSpan = document.getElementById('gotot-hyena-date');
+            if (foundKey !== searchKey && dateSpan) {
+                let displayDate = formatCzechDate(new Date(foundKey));
+                dateSpan.innerHTML = `${displayDate} <span style="font-size:12px; color:#f39c12; margin-left:5px;">(nejbližší vydání)</span>`;
+            }
+
             if (newsItems && newsItems.length > 0) {
                 let listHtml = '<ul class="gotot-hyena-list">';
                 newsItems.forEach(item => { listHtml += `<li>${item}</li>`; });
                 listHtml += '</ul>';
                 contentEl.innerHTML = listHtml;
             } else {
-                contentEl.innerHTML = `<i>Ondřej Neff tento den (${targetDateStr}) Hyenu zřejmě nevydal.</i>`;
+                contentEl.innerHTML = `<i>Databáze zpráv pro tento rok je zatím prázdná.</i>`;
             }
         };
 
-        // If we already downloaded this year's database during this session, use it instantly
         if (hyenaDBCache[yyyy]) {
             renderNews(hyenaDBCache[yyyy]);
             return;
         }
 
-        // Otherwise, fetch it from the GitHub repository
+        // Pulling from the newly created 'db' folder!
         const archiveUrl = `https://raw.githubusercontent.com/hanenashi/gotot/main/db/hyena_${yyyy}.json`;
 
         GM_xmlhttpRequest({
             method: "GET",
             url: archiveUrl,
-            responseType: "json", // Automatically parses the JSON
+            responseType: "json",
             onload: function(response) {
                 if (response.status === 200 && response.response) {
-                    hyenaDBCache[yyyy] = response.response; // Save to memory cache
+                    hyenaDBCache[yyyy] = response.response; 
                     renderNews(hyenaDBCache[yyyy]);
                 } else if (response.status === 404) {
-                    contentEl.innerHTML = `<i>Databáze zpráv pro rok ${yyyy} zatím není na GitHubu nahrána.</i>`;
+                    contentEl.innerHTML = `<i>Databáze zpráv pro rok ${yyyy} zatím nebyla nalezena.</i>`;
                 } else {
                     contentEl.innerHTML = `<i>Chyba při čtení databáze: Status ${response.status}</i>`;
                 }
@@ -187,12 +230,16 @@
             input.disabled = true;
         });
 
-        createOverlay(targetDateStr);
-        fetchHyenaNews(targetDateStr);
-
         let currentUrl = window.location.href;
         
-        // Setup Smart Cancel functionality
+        // Capture the timestamp of the page where the user initiated the search
+        let startTs = parseUrlDate(currentUrl) || now;
+
+        createOverlay(targetDateStr);
+        
+        // Pass startTs to the fetcher so it knows which direction to break ties
+        fetchHyenaNews(targetDateStr, startTs);
+        
         const cancelBtn = document.getElementById('gotot-cancel-btn');
         if (cancelBtn) {
             cancelBtn.addEventListener('click', () => {
