@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      1.7.1
+// @version      1.7.2
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -89,7 +89,6 @@
 
     function formatCzechDate(dateObj) {
         let str = dateObj.toLocaleDateString('cs-CZ', { weekday: 'long', year: 'numeric', month: 'numeric', day: 'numeric' });
-        // Capitalize the first letter (e.g. "pondělí" -> "Pondělí")
         return str.charAt(0).toUpperCase() + str.slice(1);
     }
 
@@ -101,7 +100,6 @@
         if (overlayEl) return;
         cancelRequested = false;
         
-        // Format the initial target date for the header
         const initDisplay = formatCzechDate(new Date(targetDateStr));
         
         overlayEl = document.createElement('div');
@@ -143,7 +141,6 @@
             let newsItems = yearDB[searchKey];
             let foundKey = searchKey;
 
-            // If the exact date is missing, find the nearest available one
             if (!newsItems) {
                 const targetTime = d.getTime();
                 let minDiff = Infinity;
@@ -157,7 +154,6 @@
                         minDiff = diff;
                         bestKey = key;
                     } else if (diff === minDiff && bestKey) {
-                        // TIE BREAKER: If distance is equal (e.g. Sat vs Mon), pick the one closer to the date we initiated the search from
                         const diffStartK = Math.abs(kTime - startTs);
                         const diffStartBest = Math.abs(new Date(bestKey).getTime() - startTs);
                         if (diffStartK < diffStartBest) {
@@ -172,7 +168,6 @@
                 }
             }
 
-            // Update the UI header if we fell back to a different date
             const dateSpan = document.getElementById('gotot-hyena-date');
             if (foundKey !== searchKey && dateSpan) {
                 let displayDate = formatCzechDate(new Date(foundKey));
@@ -194,7 +189,6 @@
             return;
         }
 
-        // Pulling from the newly created 'db' folder!
         const archiveUrl = `https://raw.githubusercontent.com/hanenashi/gotot/main/db/hyena_${yyyy}.json`;
 
         GM_xmlhttpRequest({
@@ -231,13 +225,9 @@
         });
 
         let currentUrl = window.location.href;
-        
-        // Capture the timestamp of the page where the user initiated the search
         let startTs = parseUrlDate(currentUrl) || now;
 
         createOverlay(targetDateStr);
-        
-        // Pass startTs to the fetcher so it knows which direction to break ties
         fetchHyenaNews(targetDateStr, startTs);
         
         const cancelBtn = document.getElementById('gotot-cancel-btn');
@@ -250,8 +240,19 @@
             });
         }
 
+        // Helper to strip the annoying cache-busting '?hash=' from URLs
+        function getCleanUrl(urlStr) {
+            try {
+                let u = new URL(urlStr, window.location.origin);
+                u.searchParams.delete('hash');
+                return u.pathname + u.search;
+            } catch(e) {
+                return urlStr.split('#')[0].replace(/([?&])hash=[^&]*/, '');
+            }
+        }
+
         const visitCounts = new Map();
-        visitCounts.set(currentUrl.split('#')[0], 1);
+        visitCounts.set(getCleanUrl(currentUrl), 1);
 
         let finalUrl = null;
         let hops = 0;
@@ -345,10 +346,11 @@
                 }
 
                 if (bestLink) {
-                    const cleanLink = bestLink.split('#')[0];
+                    const cleanLink = getCleanUrl(bestLink);
                     let visits = visitCounts.get(cleanLink) || 0;
                     
-                    if (visits >= 3 || bestLink === currentUrl) {
+                    // Reduced to 2: If we see the exact same cleaned URL twice, we are bouncing at the wall
+                    if (visits >= 2 || bestLink === currentUrl) {
                         hitDeadEnd = true;
                         finalUrl = currentUrl;
                         break;
