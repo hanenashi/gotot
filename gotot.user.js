@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      1.6.4
+// @version      1.6.5
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a Hyena.cz news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -147,7 +147,6 @@
                 }
 
                 try {
-                    // Hidden HTML comment tags safely constructed
                     const tStart = "<" + "!--";
                     const tEnd = "--" + ">";
                     const pat = tStart + "[^>]*odsud[^>]*" + tEnd + "([\\s\\S]*?)(?:<\\/ul>|<br[^>]*>\\s*<br[^>]*>\\s*<i|<p>|" + tStart + ")";
@@ -210,13 +209,20 @@
         let finalOldest = 0;
         let finalNewest = 0;
         let hitDeadEnd = false; 
+        let lastPassingDateStr = ""; // Store date so it survives the fetch loop
 
         const czDateFormatter = new Intl.DateTimeFormat('cs-CZ', { year: 'numeric', month: 'long', day: 'numeric' });
 
         try {
             while (hops < MAX_HOPS && !finalUrl && !cancelRequested) {
                 hops++;
-                updateStatus("Skenuji okoun.cz... (Krok " + hops + ")");
+                
+                // Show last known date while we fetch the next page
+                if (lastPassingDateStr) {
+                    updateStatus("Skenuji okoun.cz... (Krok " + hops + ")<br><span style='color: #d35400; font-size: 14px;'>Míjím: " + lastPassingDateStr + "</span>");
+                } else {
+                    updateStatus("Skenuji okoun.cz... (Krok " + hops + ")");
+                }
                 
                 const response = await fetch(currentUrl);
                 const text = await response.text();
@@ -242,8 +248,9 @@
                 finalNewest = newest;
 
                 if (newest > 0) {
-                    const passingDateStr = czDateFormatter.format(new Date(newest));
-                    updateStatus("Skenuji okoun.cz... (Krok " + hops + ")<br><span style='color: #d35400; font-size: 14px;'>Míjím: " + passingDateStr + "</span>");
+                    lastPassingDateStr = czDateFormatter.format(new Date(newest));
+                    // Instantly update the text so we don't have to wait for the next loop
+                    updateStatus("Skenuji okoun.cz... (Krok " + hops + ")<br><span style='color: #d35400; font-size: 14px;'>Míjím: " + lastPassingDateStr + "</span>");
                 }
 
                 if (items.length === 0 || (targetTs <= newest && targetTs >= oldest)) {
