@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      1.6.5
+// @version      1.6.6
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a Hyena.cz news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -100,11 +100,6 @@
         overlayEl.id = 'gotot-overlay';
         overlayEl.innerHTML = '<div id="gotot-modal"><h3 class="gotot-modal-title">Stroj času GoToT <span id="gotot-hyena-date">' + targetDateStr + '</span></h3><div id="gotot-hyena-content"><i>Navazuji spojení s Hyena.cz...</i></div><div id="gotot-status-text">Připravuji skok v čase...</div><div class="gotot-buttons"><button id="gotot-cancel-btn" class="gotot-action-btn">Zrušit skok</button><button id="gotot-continue-btn" class="gotot-action-btn">Přejít na datum</button></div></div>';
         document.body.appendChild(overlayEl);
-
-        document.getElementById('gotot-cancel-btn').addEventListener('click', () => {
-            cancelRequested = true;
-            closeOverlay();
-        });
     }
 
     function closeOverlay() {
@@ -198,26 +193,37 @@
         createOverlay(targetDateStr);
         fetchHyenaNews(targetDateStr);
 
-        const visited = new Set();
         let currentUrl = window.location.href;
-        visited.add(currentUrl.split('#')[0]);
+        
+        // Setup Smart Cancel functionality
+        const cancelBtn = document.getElementById('gotot-cancel-btn');
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => {
+                cancelRequested = true;
+                cancelBtn.innerText = "Zastavuji...";
+                updateStatus('<span style="color: #f39c12;">Skok přerušen. Načítám aktuální pozici...</span>');
+                // Drop the user off exactly where the crawler was when they clicked cancel
+                window.location.href = currentUrl; 
+            });
+        }
+
+        const visitCounts = new Map();
+        visitCounts.set(currentUrl.split('#')[0], 1);
 
         let finalUrl = null;
         let hops = 0;
-        const MAX_HOPS = 150; 
         
         let finalOldest = 0;
         let finalNewest = 0;
         let hitDeadEnd = false; 
-        let lastPassingDateStr = ""; // Store date so it survives the fetch loop
+        let lastPassingDateStr = ""; 
 
         const czDateFormatter = new Intl.DateTimeFormat('cs-CZ', { year: 'numeric', month: 'long', day: 'numeric' });
 
         try {
-            while (hops < MAX_HOPS && !finalUrl && !cancelRequested) {
+            while (!finalUrl && !cancelRequested) {
                 hops++;
                 
-                // Show last known date while we fetch the next page
                 if (lastPassingDateStr) {
                     updateStatus("Skenuji okoun.cz... (Krok " + hops + ")<br><span style='color: #d35400; font-size: 14px;'>Míjím: " + lastPassingDateStr + "</span>");
                 } else {
@@ -249,7 +255,6 @@
 
                 if (newest > 0) {
                     lastPassingDateStr = czDateFormatter.format(new Date(newest));
-                    // Instantly update the text so we don't have to wait for the next loop
                     updateStatus("Skenuji okoun.cz... (Krok " + hops + ")<br><span style='color: #d35400; font-size: 14px;'>Míjím: " + lastPassingDateStr + "</span>");
                 }
 
@@ -298,11 +303,16 @@
 
                 if (bestLink) {
                     const cleanLink = bestLink.split('#')[0];
-                    if (visited.has(cleanLink) || bestLink === currentUrl) {
+                    let visits = visitCounts.get(cleanLink) || 0;
+                    
+                    // Stop if we hit the exact same URL 3 times
+                    if (visits >= 3 || bestLink === currentUrl) {
+                        hitDeadEnd = true;
                         finalUrl = currentUrl;
                         break;
                     }
-                    visited.add(cleanLink);
+                    
+                    visitCounts.set(cleanLink, visits + 1);
                     currentUrl = bestLink;
                 } else {
                     hitDeadEnd = true; 
@@ -312,14 +322,14 @@
             }
         } catch (e) {
             console.error("GoToT Error", e);
-            updateStatus('<span style="color: #f39c12;">Chyba sítě při hledání data.</span>');
-            finalUrl = currentUrl; 
+            if (!cancelRequested) {
+                updateStatus('<span style="color: #f39c12;">Chyba sítě při hledání data.</span>');
+                finalUrl = currentUrl; 
+            }
         }
 
         if (!cancelRequested) {
-            if (hops >= MAX_HOPS) {
-                updateStatus('<span style="color: #f39c12;">Dosažen limit vzdálenosti skoku (' + MAX_HOPS + ' kroků). Budete vysazeni na půli cesty.</span>');
-            } else if (hitDeadEnd && targetTs < finalOldest && finalOldest > 0) {
+            if (hitDeadEnd && targetTs < finalOldest && finalOldest > 0) {
                 updateStatus('<span style="color: #f39c12;">Klub v této době ještě neexistoval. Nastavuji nejstarší dostupnou stránku.</span>');
             } else if (hitDeadEnd && targetTs > finalNewest && finalNewest > 0 && hops > 1) {
                 updateStatus('<span style="color: #f39c12;">Novější zprávy nebyly nalezeny. Nastavuji nejnovější dostupnou stránku.</span>');
@@ -328,13 +338,18 @@
             }
             
             const continueBtn = document.getElementById('gotot-continue-btn');
-            const cancelBtn = document.getElementById('gotot-cancel-btn');
             
             if (continueBtn) {
                 continueBtn.style.display = 'block';
                 continueBtn.onclick = () => { window.location.href = finalUrl || currentUrl; };
             }
-            if (cancelBtn) cancelBtn.innerText = "Zavřít";
+            if (cancelBtn) {
+                // Keep cancel functionality active even after completing to allow dropping off instead of "Continue"
+                cancelBtn.innerText = "Zavřít a zůstat zde";
+                // Remove the redirect from this button since the user might just want to back out
+                cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+                document.getElementById('gotot-cancel-btn').addEventListener('click', closeOverlay);
+            }
         }
     }
 
