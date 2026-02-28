@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.2.2
+// @version      2.3.0
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -15,15 +15,10 @@
 (function() {
     'use strict';
 
-    // 1. Hardwarová detekce dotykového zařízení (nepřeprsknutelná prohlížečem)
+    // 1. Spolehlivá hardwarová detekce dotykového zařízení
     const isTouchDevice = (('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (navigator.msMaxTouchPoints > 0));
     const isMobileUA = /Mobi|Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     const isMobile = isTouchDevice || isMobileUA;
-
-    console.log("=== GoToT Debug ===");
-    console.log("Touch device detected:", isTouchDevice);
-    console.log("Final isMobile status:", isMobile);
-    console.log("=====================");
 
     // 2. Styles
     const styleEl = document.createElement('style');
@@ -45,7 +40,7 @@
         }
         .goto-btn:hover { color: #d35400; }
 
-        /* --- Overlay Styles (Zprávy z Hyeny) --- */
+        /* --- Overlay Styles --- */
         #gotot-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(8px);
@@ -72,10 +67,35 @@
 
         /* --- Mobile UX pro lištu --- */
         li.gotot-mobile {
-            width: 32px; height: 32px; justify-content: center; margin-right: 5px;
+            width: 32px; 
+            height: 32px; 
+            justify-content: center; 
+            margin-right: 5px;
+            /* Zákaz označování textu (lupy) a vyskakování systémových menu */
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
         }
+        li.gotot-mobile .goto-input { 
+            position: absolute !important; 
+            top: 0 !important; 
+            left: 0 !important; 
+            width: 100% !important; 
+            height: 100% !important; 
+            opacity: 0 !important; /* Políčko je 100% průhledné, ale sedí přímo přes lupu */
+            margin: 0 !important; 
+            padding: 0 !important; 
+            border: none !important; 
+            z-index: 10 !important; 
+            cursor: pointer !important;
+            -webkit-appearance: none !important;
+        } 
         li.gotot-mobile .goto-btn { 
-            font-size: 18px; padding: 2px; margin: 0; 
+            font-size: 18px; 
+            padding: 2px; 
+            margin: 0; 
+            z-index: 1; /* Lupa je vykreslena pod neviditelným políčkem */
+            pointer-events: none; /* Dotyky propadnou na input */
         }
     `;
     document.head.appendChild(styleEl);
@@ -239,66 +259,41 @@
             const li = document.createElement('li');
             li.className = 'goto-nav-item';
             
+            const input = document.createElement('input');
+            input.type = 'date';
+            input.className = 'goto-input';
+            input.title = 'Vyber datum a leť!';
+            
             const btn = document.createElement('button');
             btn.className = 'goto-btn';
             btn.innerHTML = '🔍';
             btn.title = 'Pravé tl. (nebo dlouhý stisk) pro nastavení overlaye';
 
-            // ZCELA ODLIŠNÁ LOGIKA PRO MOBIL A DESKTOP
+            const go = () => { if (input.value) performScan(input.value); };
+
+            // AUTO-JUMP po výběru data
+            input.addEventListener('change', go);
+            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+
             if (isMobile) {
+                // MOBILNÍ LAYOUT: Přidáme speciální třídu, která zneviditelní input a zakáže označování lupy
                 li.classList.add('gotot-mobile');
-                // Připojíme JENOM lupu. Žádný trvalý input.
+                
+                // Do lišty vložíme OBĚ věci. Neviditelný input bude sedět díky CSS přesně nad lupou.
+                li.appendChild(input);
                 li.appendChild(btn);
 
-                btn.addEventListener('click', (e) => { 
-                    e.preventDefault(); 
-                    
-                    // Vytvoříme dočasný neviditelný input jen pro vyvolání kalendáře
-                    const tempInput = document.createElement('input');
-                    tempInput.type = 'date';
-                    tempInput.style.cssText = 'position: fixed; top: 50%; left: 50%; opacity: 0; width: 0; height: 0; border: none; padding: 0; margin: 0; z-index: -1; pointer-events: none;';
-                    document.body.appendChild(tempInput);
-
-                    // Když uživatel vybere datum
-                    tempInput.addEventListener('change', () => {
-                        if (tempInput.value) performScan(tempInput.value);
-                        tempInput.remove(); // Uklidíme po sobě
-                    });
-
-                    // Když uživatel klikne mimo (zruší kalendář)
-                    tempInput.addEventListener('cancel', () => tempInput.remove());
-                    tempInput.addEventListener('blur', () => tempInput.remove());
-
-                    // Vyvoláme nativní okno
-                    try { 
-                        tempInput.showPicker(); 
-                    } catch (err) { 
-                        // Záložní řešení, kdyby prohlížeč blokoval showPicker (např. starší iOS)
-                        tempInput.focus(); 
-                    }
-                });
             } else {
-                // Klasický desktopový vzhled (Vstupní políčko + Lupa)
-                const input = document.createElement('input');
-                input.type = 'date';
-                input.className = 'goto-input';
-                input.title = 'Vyber datum a leť!';
-                
-                const go = () => { if (input.value) performScan(input.value); };
-
-                input.addEventListener('change', go);
-                input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-                
+                // DESKTOP: Klasický vzhled vedle sebe
                 btn.addEventListener('click', (e) => { 
                     e.preventDefault(); 
                     go(); 
                 });
-
                 li.appendChild(input);
                 li.appendChild(btn);
             }
 
-            // Nastavení přeskočení zpráv (funguje všude)
+            // NASTAVENÍ: Dlouhý stisk (nebo pravé tlačítko) kdekoli na prvku (na mobilu tedy na neviditelném inputu)
             li.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
