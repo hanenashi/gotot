@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.2.1
+// @version      2.2.2
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -15,17 +15,12 @@
 (function() {
     'use strict';
 
-    // 1. Hardwarová detekce dotykového zařízení (Mnohem spolehlivější než User-Agent)
+    // 1. Hardwarová detekce dotykového zařízení (nepřeprsknutelná prohlížečem)
     const isTouchDevice = (('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (navigator.msMaxTouchPoints > 0));
-    
-    // Fallback na UA, kdyby náhodou
     const isMobileUA = /Mobi|Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    
     const isMobile = isTouchDevice || isMobileUA;
 
-    // --- DEBUG VÝPIS DO KONZOLE ---
     console.log("=== GoToT Debug ===");
-    console.log("User-Agent:", navigator.userAgent);
     console.log("Touch device detected:", isTouchDevice);
     console.log("Final isMobile status:", isMobile);
     console.log("=====================");
@@ -50,8 +45,8 @@
         }
         .goto-btn:hover { color: #d35400; }
 
-        /* --- Overlay Styles --- */
-        #gotot-overlay, #gotot-mobile-prompt-overlay {
+        /* --- Overlay Styles (Zprávy z Hyeny) --- */
+        #gotot-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(8px);
             z-index: 999999; display: flex; align-items: center; justify-content: center;
@@ -75,13 +70,6 @@
         #gotot-continue-btn { background: #d35400; color: #fff; display: none; }
         #gotot-continue-btn:hover { background: #e67e22; }
 
-        /* --- Mobile Input Prompt Styles --- */
-        #gotot-big-date-input {
-            width: 100%; padding: 12px; font-size: 16px; border-radius: 4px; 
-            border: 1px solid #d35400; background: #333; color: #fff; 
-            box-sizing: border-box; outline: none; margin-bottom: 20px;
-        }
-
         /* --- Mobile UX pro lištu --- */
         li.gotot-mobile {
             width: 32px; height: 32px; justify-content: center; margin-right: 5px;
@@ -104,39 +92,6 @@
         const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
         const dd = String(dateObj.getDate()).padStart(2, '0');
         return `${yyyy}${mm}${dd}-000000`;
-    }
-
-    // --- Mobile Pre-Jump Modal ---
-    function openMobileDatePicker() {
-        if (document.getElementById('gotot-mobile-prompt-overlay')) return;
-
-        const overlay = document.createElement('div');
-        overlay.id = 'gotot-mobile-prompt-overlay';
-        overlay.innerHTML = `
-            <div id="gotot-modal" style="text-align: center;">
-                <h3 class="gotot-modal-title">Zadejte cílové datum</h3>
-                <input type="date" id="gotot-big-date-input">
-                <div class="gotot-buttons">
-                    <button id="gotot-mobile-cancel-btn" class="gotot-action-btn" style="background: #444; color: #fff;">Zrušit</button>
-                </div>
-            </div>`;
-        document.body.appendChild(overlay);
-
-        const dateInput = document.getElementById('gotot-big-date-input');
-        
-        document.getElementById('gotot-mobile-cancel-btn').addEventListener('click', () => {
-            overlay.remove();
-        });
-
-        dateInput.addEventListener('change', () => {
-            if (dateInput.value) {
-                const selectedDate = dateInput.value;
-                overlay.remove();
-                performScan(selectedDate);
-            }
-        });
-
-        try { dateInput.showPicker(); } catch (e) { dateInput.focus(); }
     }
 
     // --- UI Management (The News Overlay) ---
@@ -289,16 +244,41 @@
             btn.innerHTML = '🔍';
             btn.title = 'Pravé tl. (nebo dlouhý stisk) pro nastavení overlaye';
 
-            // Rozhodnutí na základě nové, silnější detekce
+            // ZCELA ODLIŠNÁ LOGIKA PRO MOBIL A DESKTOP
             if (isMobile) {
                 li.classList.add('gotot-mobile');
-                li.appendChild(btn); // POUZE LUPA
+                // Připojíme JENOM lupu. Žádný trvalý input.
+                li.appendChild(btn);
 
                 btn.addEventListener('click', (e) => { 
                     e.preventDefault(); 
-                    openMobileDatePicker(); 
+                    
+                    // Vytvoříme dočasný neviditelný input jen pro vyvolání kalendáře
+                    const tempInput = document.createElement('input');
+                    tempInput.type = 'date';
+                    tempInput.style.cssText = 'position: fixed; top: 50%; left: 50%; opacity: 0; width: 0; height: 0; border: none; padding: 0; margin: 0; z-index: -1; pointer-events: none;';
+                    document.body.appendChild(tempInput);
+
+                    // Když uživatel vybere datum
+                    tempInput.addEventListener('change', () => {
+                        if (tempInput.value) performScan(tempInput.value);
+                        tempInput.remove(); // Uklidíme po sobě
+                    });
+
+                    // Když uživatel klikne mimo (zruší kalendář)
+                    tempInput.addEventListener('cancel', () => tempInput.remove());
+                    tempInput.addEventListener('blur', () => tempInput.remove());
+
+                    // Vyvoláme nativní okno
+                    try { 
+                        tempInput.showPicker(); 
+                    } catch (err) { 
+                        // Záložní řešení, kdyby prohlížeč blokoval showPicker (např. starší iOS)
+                        tempInput.focus(); 
+                    }
                 });
             } else {
+                // Klasický desktopový vzhled (Vstupní políčko + Lupa)
                 const input = document.createElement('input');
                 input.type = 'date';
                 input.className = 'goto-input';
@@ -318,6 +298,7 @@
                 li.appendChild(btn);
             }
 
+            // Nastavení přeskočení zpráv (funguje všude)
             li.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
