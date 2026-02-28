@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.2.0
+// @version      2.2.1
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -15,8 +15,20 @@
 (function() {
     'use strict';
 
-    // 1. Spolehlivá detekce mobilu
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    // 1. Hardwarová detekce dotykového zařízení (Mnohem spolehlivější než User-Agent)
+    const isTouchDevice = (('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (navigator.msMaxTouchPoints > 0));
+    
+    // Fallback na UA, kdyby náhodou
+    const isMobileUA = /Mobi|Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    const isMobile = isTouchDevice || isMobileUA;
+
+    // --- DEBUG VÝPIS DO KONZOLE ---
+    console.log("=== GoToT Debug ===");
+    console.log("User-Agent:", navigator.userAgent);
+    console.log("Touch device detected:", isTouchDevice);
+    console.log("Final isMobile status:", isMobile);
+    console.log("=====================");
 
     // 2. Styles
     const styleEl = document.createElement('style');
@@ -112,12 +124,10 @@
 
         const dateInput = document.getElementById('gotot-big-date-input');
         
-        // Zrušení
         document.getElementById('gotot-mobile-cancel-btn').addEventListener('click', () => {
             overlay.remove();
         });
 
-        // Auto-jump jakmile vybereš v kalendáři
         dateInput.addEventListener('change', () => {
             if (dateInput.value) {
                 const selectedDate = dateInput.value;
@@ -126,7 +136,6 @@
             }
         });
 
-        // Pro jistotu rovnou otevřeme picker
         try { dateInput.showPicker(); } catch (e) { dateInput.focus(); }
     }
 
@@ -212,121 +221,5 @@
                 listHtml += '</ul>';
                 contentEl.innerHTML = listHtml;
             } else {
-                contentEl.innerHTML = `<i>Databáze zpráv pro tento rok je zatím prázdná.</i>`;
-            }
-        };
-
-        if (hyenaDBCache[yyyy]) {
-            renderNews(hyenaDBCache[yyyy]);
-            return;
-        }
-
-        const archiveUrl = `https://raw.githubusercontent.com/hanenashi/gotot/main/db/hyena_${yyyy}.json`;
-
-        fetch(archiveUrl)
-            .then(response => {
-                if (response.status === 404) throw new Error("404");
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                return response.json();
-            })
-            .then(data => {
-                hyenaDBCache[yyyy] = data;
-                renderNews(hyenaDBCache[yyyy]);
-            })
-            .catch(error => {
-                if (error.message === "404") {
-                    contentEl.innerHTML = `<i>Databáze zpráv pro rok ${yyyy} zatím nebyla nalezena.</i>`;
-                } else {
-                    contentEl.innerHTML = `<i>Nepodařilo se připojit k databázi zpráv.</i>`;
-                    console.error("GoToT Fetch Error:", error);
-                }
-            });
-    }
-
-    // --- The "Native" Time Jump ---
-    function performScan(targetDateStr) {
-        const targetDate = new Date(targetDateStr);
-        if (isNaN(targetDate.getTime())) return;
-
-        const okounParam = getOkounDateParam(targetDate);
-        const cleanBaseUrl = window.location.href.split('?')[0].split('#')[0];
-        const finalUrl = `${cleanBaseUrl}?f=${okounParam}`;
-
-        let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
-        if (skipOverlay) {
-            window.location.href = finalUrl;
-            return;
-        }
-
-        createOverlay(targetDateStr);
-        fetchHyenaNews(targetDateStr);
-        
-        const continueBtn = document.getElementById('gotot-continue-btn');
-        if (continueBtn) {
-            continueBtn.onclick = () => { window.location.href = finalUrl; };
-        }
-    }
-
-    // --- Init ---
-    function init() {
-        const pagerNavs = document.querySelectorAll('.pager > ul.nav:first-of-type');
-        
-        pagerNavs.forEach(nav => {
-            const li = document.createElement('li');
-            li.className = 'goto-nav-item';
-            
-            const btn = document.createElement('button');
-            btn.className = 'goto-btn';
-            btn.innerHTML = '🔍';
-            btn.title = 'Pravé tl. (nebo dlouhý stisk) pro nastavení overlaye';
-
-            // ZCELA ODLIŠNÁ LOGIKA PRO MOBIL A DESKTOP
-            if (isMobile) {
-                li.classList.add('gotot-mobile');
-                // Připojíme JENOM lupu. Žádný input, absolutně žádné artefakty.
-                li.appendChild(btn);
-
-                btn.addEventListener('click', (e) => { 
-                    e.preventDefault(); 
-                    openMobileDatePicker(); // Otevře speciální ovládací panel
-                });
-            } else {
-                // Klasický desktopový vzhled
-                const input = document.createElement('input');
-                input.type = 'date';
-                input.className = 'goto-input';
-                input.title = 'Vyber datum a leť!';
-                
-                const go = () => { if (input.value) performScan(input.value); };
-
-                input.addEventListener('change', go);
-                input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-                
-                btn.addEventListener('click', (e) => { 
-                    e.preventDefault(); 
-                    go(); 
-                });
-
-                li.appendChild(input);
-                li.appendChild(btn);
-            }
-
-            // Nastavení přeskočení zpráv (funguje všude)
-            li.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
-                localStorage.setItem('gotot_skip_overlay', !skipOverlay);
-                
-                if (!skipOverlay) {
-                    alert('Mód rychlého skoku: ZAPNUTÝ\n\nSkript tě nyní přenese v čase rovnou a skryje retro zprávy z Hyeny.');
-                } else {
-                    alert('Mód rychlého skoku: VYPNUTÝ\n\nBěhem skoku se ti opět zobrazí okno se zprávami z Hyeny.');
-                }
-            });
-
-            nav.insertBefore(li, nav.firstChild);
-        });
-    }
-
-    init();
-})();
+                contentEl.innerHTML =
+                    
