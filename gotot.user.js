@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.1.2
+// @version      2.1.3
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -64,11 +64,16 @@
         @media (max-width: 600px) { 
             .goto-input { 
                 position: absolute !important; 
-                left: -9999px !important; /* Move it completely off-screen */
                 width: 1px !important; 
                 height: 1px !important; 
-                opacity: 0 !important; 
-                overflow: hidden !important;
+                padding: 0 !important; 
+                margin: -1px !important; 
+                overflow: hidden !important; 
+                clip: rect(0, 0, 0, 0) !important; 
+                white-space: nowrap !important; 
+                border: 0 !important;
+                appearance: none !important;
+                -webkit-appearance: none !important;
             } 
             .goto-btn { font-size: 16px; padding: 4px 6px; margin-left: 0; }
         }
