@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.0.0
+// @version      2.1.0
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -23,16 +23,15 @@
             vertical-align: middle; position: relative; top: -2px;
         }
         .goto-input {
-            background: #222; border: 1px solid #444; color: #ddd;
+            background: #ffffff; border: 1px solid #aaa; color: #000;
             font-family: Arial, sans-serif; font-size: 11px;
             padding: 2px 4px; border-radius: 3px; outline: none; width: 115px;
         }
-        .goto-input:focus { border-color: #d35400; color: #fff; }
-        .goto-input.scanning { background: #331a00; border-color: #d35400; cursor: wait; }
+        .goto-input:focus { border-color: #d35400; }
         
         .goto-btn {
             background: transparent; border: none; color: #777;
-            cursor: pointer; font-size: 12px; padding: 2px 5px; margin-left: 2px;
+            cursor: pointer; font-size: 13px; padding: 2px 5px; margin-left: 2px;
         }
         .goto-btn:hover { color: #d35400; }
 
@@ -49,7 +48,7 @@
             color: #ccc;
         }
         .gotot-modal-title { margin: 0 0 15px 0; color: #d35400; font-size: 18px; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        #gotot-hyena-date { color: #888; font-size: 12px; float: right; margin-top: 4px; }
+        #gotot-hyena-date { color: #888; font-size: 13px; float: right; margin-top: 4px; }
         #gotot-hyena-content { min-height: 100px; font-size: 13px; line-height: 1.6; }
         .gotot-hyena-list { list-style-type: square; padding-left: 20px; margin: 0; color: #bbb; }
         .gotot-hyena-list li { margin-bottom: 6px; }
@@ -61,14 +60,21 @@
         #gotot-continue-btn { background: #d35400; color: #fff; display: none; }
         #gotot-continue-btn:hover { background: #e67e22; }
 
-        @media (max-width: 600px) { .goto-input { width: 90px; } }
+        /* --- Mobile UX --- */
+        @media (max-width: 600px) { 
+            .goto-input { 
+                position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; 
+            } 
+            .goto-btn { font-size: 16px; padding: 4px 6px; }
+        }
     `;
     document.head.appendChild(styleEl);
 
     // --- Helpers ---
     function formatCzechDate(dateObj) {
-        let str = dateObj.toLocaleDateString('cs-CZ', { weekday: 'long', year: 'numeric', month: 'numeric', day: 'numeric' });
-        return str.charAt(0).toUpperCase() + str.slice(1);
+        const days = ['Neděle', 'Pondělí', 'Úterý', 'Středa', 'Čtvrtek', 'Pátek', 'Sobota'];
+        const months = ['ledna', 'února', 'března', 'dubna', 'května', 'června', 'července', 'srpna', 'září', 'října', 'listopadu', 'prosince'];
+        return `${days[dateObj.getDay()]} ${dateObj.getDate()}. ${months[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
     }
 
     function getOkounDateParam(dateObj) {
@@ -90,12 +96,12 @@
         overlayEl.id = 'gotot-overlay';
         overlayEl.innerHTML = `
             <div id="gotot-modal">
-                <h3 class="gotot-modal-title">Stroj času GoToT <span id="gotot-hyena-date">${initDisplay}</span></h3>
+                <h3 class="gotot-modal-title">Stroj času <span id="gotot-hyena-date">${initDisplay}</span></h3>
                 <div id="gotot-hyena-content"><i>Načítám databázi zpráv...</i></div>
-                <div id="gotot-status-text">Připravuji skok v čase...</div>
+                <div id="gotot-status-text">Přesun připraven...</div>
                 <div class="gotot-buttons">
-                    <button id="gotot-cancel-btn" class="gotot-action-btn">Zavřít</button>
-                    <button id="gotot-continue-btn" class="gotot-action-btn" style="display: block;">Přejít na datum</button>
+                    <button id="gotot-cancel-btn" class="gotot-action-btn">Zavřít zprávy</button>
+                    <button id="gotot-continue-btn" class="gotot-action-btn" style="display: block;">Dokončit skok</button>
                 </div>
             </div>`;
         document.body.appendChild(overlayEl);
@@ -108,15 +114,6 @@
             overlayEl.remove();
             overlayEl = null;
         }
-        document.querySelectorAll('.goto-input').forEach(input => {
-            input.classList.remove('scanning');
-            input.disabled = false;
-        });
-    }
-
-    function updateStatus(textHtml) {
-        const statusEl = document.getElementById('gotot-status-text');
-        if (statusEl) statusEl.innerHTML = textHtml;
     }
 
     // --- Data Fetching (Vanilla Fetch API) ---
@@ -205,23 +202,20 @@
         const targetDate = new Date(targetDateStr);
         if (isNaN(targetDate.getTime())) return;
 
-        document.querySelectorAll('.goto-input').forEach(input => {
-            input.classList.add('scanning');
-            input.disabled = true;
-        });
-
-        // Generate Okoun's secret URL parameter
         const okounParam = getOkounDateParam(targetDate);
-        
-        // Clean current URL to avoid stacking parameters
         const cleanBaseUrl = window.location.href.split('?')[0].split('#')[0];
         const finalUrl = `${cleanBaseUrl}?f=${okounParam}`;
+
+        // Check if user disabled the overlay
+        let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
+        if (skipOverlay) {
+            window.location.href = finalUrl;
+            return;
+        }
 
         createOverlay(targetDateStr);
         fetchHyenaNews(targetDateStr);
         
-        updateStatus("Okamžitý časový přesun připraven!");
-
         const continueBtn = document.getElementById('gotot-continue-btn');
         if (continueBtn) {
             continueBtn.onclick = () => { window.location.href = finalUrl; };
@@ -238,17 +232,41 @@
             const input = document.createElement('input');
             input.type = 'date';
             input.className = 'goto-input';
-            input.title = 'Jít na datum (Enter)';
+            input.title = 'Vyber datum a leť!';
             
             const btn = document.createElement('button');
             btn.className = 'goto-btn';
             btn.innerHTML = '🔍';
-            btn.title = 'Hledat';
+            btn.title = 'Pravé tl. (nebo dlouhý stisk) pro nastavení overlaye';
 
             const go = () => { if (input.value) performScan(input.value); };
 
+            // 1. AUTO-JUMP: Start jump immediately when date is picked
+            input.addEventListener('change', go);
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-            btn.addEventListener('click', (e) => { e.preventDefault(); go(); });
+            
+            // 2. MOBILE UX: Use magnifier to trigger native picker
+            btn.addEventListener('click', (e) => { 
+                e.preventDefault(); 
+                if (window.innerWidth <= 600) {
+                    try { input.showPicker(); } catch(err) { input.focus(); }
+                } else {
+                    go(); 
+                }
+            });
+
+            // 3. TOGGLE OVERLAY: Context menu / Long press to disable news
+            btn.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
+                localStorage.setItem('gotot_skip_overlay', !skipOverlay);
+                
+                if (!skipOverlay) {
+                    alert('Mód rychlého skoku: ZAPNUTÝ\\n\\nSkript tě nyní přenese v čase rovnou a skryje retro zprávy z Hyeny.');
+                } else {
+                    alert('Mód rychlého skoku: VYPNUTÝ\\n\\nBěhem skoku se ti opět zobrazí okno se zprávami z Hyeny.');
+                }
+            });
 
             li.appendChild(input);
             li.appendChild(btn);
