@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.1.0
+// @version      2.1.1
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -63,9 +63,16 @@
         /* --- Mobile UX --- */
         @media (max-width: 600px) { 
             .goto-input { 
-                position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; 
+                position: absolute; 
+                opacity: 0; 
+                width: 0; 
+                height: 0; 
+                padding: 0; 
+                margin: 0; 
+                border: none; 
+                pointer-events: none; 
             } 
-            .goto-btn { font-size: 16px; padding: 4px 6px; }
+            .goto-btn { font-size: 16px; padding: 4px 6px; margin-left: 0; }
         }
     `;
     document.head.appendChild(styleEl);
@@ -262,9 +269,9 @@
                 localStorage.setItem('gotot_skip_overlay', !skipOverlay);
                 
                 if (!skipOverlay) {
-                    alert('Mód rychlého skoku: ZAPNUTÝ\\n\\nSkript tě nyní přenese v čase rovnou a skryje retro zprávy z Hyeny.');
+                    alert('Mód rychlého skoku: ZAPNUTÝ\n\nSkript tě nyní přenese v čase rovnou a skryje retro zprávy z Hyeny.');
                 } else {
-                    alert('Mód rychlého skoku: VYPNUTÝ\\n\\nBěhem skoku se ti opět zobrazí okno se zprávami z Hyeny.');
+                    alert('Mód rychlého skoku: VYPNUTÝ\n\nBěhem skoku se ti opět zobrazí okno se zprávami z Hyeny.');
                 }
             });
 
