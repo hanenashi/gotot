@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.1.4
+// @version      2.1.5
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -15,7 +15,10 @@
 (function() {
     'use strict';
 
-    // 1. Styles
+    // 1. Spolehlivá detekce mobilu (obchází chybějící viewport Okounu)
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    // 2. Styles
     const styleEl = document.createElement('style');
     styleEl.textContent = `
         li.goto-nav-item {
@@ -60,33 +63,31 @@
         #gotot-continue-btn { background: #d35400; color: #fff; display: none; }
         #gotot-continue-btn:hover { background: #e67e22; }
 
-        /* --- Mobile UX --- */
-        @media (max-width: 600px) { 
-            li.goto-nav-item {
-                width: 32px; 
-                height: 32px;
-                justify-content: center;
-                margin-right: 5px;
-            }
-            .goto-input { 
-                position: absolute !important; 
-                top: 0 !important; 
-                left: 0 !important; 
-                width: 100% !important; 
-                height: 100% !important; 
-                opacity: 0 !important; /* Neviditelný, ale funkční a překrývající lupu */
-                margin: 0 !important; 
-                padding: 0 !important; 
-                border: none !important; 
-                z-index: 10 !important; 
-                cursor: pointer;
-            } 
-            .goto-btn { 
-                font-size: 18px; 
-                padding: 0; 
-                margin: 0; 
-                z-index: 1; /* Lupa sedí pod neviditelným políčkem */
-            }
+        /* --- Mobile UX (aplikováno pouze přes JS třídu) --- */
+        li.gotot-mobile {
+            width: 32px; 
+            height: 32px;
+            justify-content: center;
+            margin-right: 5px;
+        }
+        li.gotot-mobile .goto-input { 
+            position: absolute !important; 
+            top: 0 !important; 
+            left: 0 !important; 
+            width: 100% !important; 
+            height: 100% !important; 
+            opacity: 0 !important; /* Políčko je neviditelné, ale 100% aktivní a překrývá lupu */
+            margin: 0 !important; 
+            padding: 0 !important; 
+            border: none !important; 
+            z-index: 10 !important; 
+            cursor: pointer;
+        } 
+        li.gotot-mobile .goto-btn { 
+            font-size: 18px; 
+            padding: 0; 
+            margin: 0; 
+            z-index: 1; /* Lupa pod inputem */
         }
     `;
     document.head.appendChild(styleEl);
@@ -250,6 +251,11 @@
             const li = document.createElement('li');
             li.className = 'goto-nav-item';
             
+            // Javascriptová aplikace mobilního layoutu
+            if (isMobile) {
+                li.classList.add('gotot-mobile');
+            }
+            
             const input = document.createElement('input');
             input.type = 'date';
             input.className = 'goto-input';
@@ -262,17 +268,17 @@
 
             const go = () => { if (input.value) performScan(input.value); };
 
-            // AUTO-JUMP: Start jump immediately when date is picked
+            // AUTO-JUMP: Přejít okamžitě po výběru z kalendáře
             input.addEventListener('change', go);
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
             
-            // DESKTOP: Button click triggers search
+            // DESKTOP: Klik na lupu
             btn.addEventListener('click', (e) => { 
                 e.preventDefault(); 
-                if (window.innerWidth > 600) go(); 
+                if (!isMobile) go(); 
             });
 
-            // TOGGLE OVERLAY: Attaching to the container (li) catches long presses whether they hit the invisible input or the button
+            // TOGGLE OVERLAY: Dlouhý stisk obalí celou položku (li)
             li.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
