@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.1.3
+// @version      2.1.4
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -62,20 +62,31 @@
 
         /* --- Mobile UX --- */
         @media (max-width: 600px) { 
+            li.goto-nav-item {
+                width: 32px; 
+                height: 32px;
+                justify-content: center;
+                margin-right: 5px;
+            }
             .goto-input { 
                 position: absolute !important; 
-                width: 1px !important; 
-                height: 1px !important; 
+                top: 0 !important; 
+                left: 0 !important; 
+                width: 100% !important; 
+                height: 100% !important; 
+                opacity: 0 !important; /* Neviditelný, ale funkční a překrývající lupu */
+                margin: 0 !important; 
                 padding: 0 !important; 
-                margin: -1px !important; 
-                overflow: hidden !important; 
-                clip: rect(0, 0, 0, 0) !important; 
-                white-space: nowrap !important; 
-                border: 0 !important;
-                appearance: none !important;
-                -webkit-appearance: none !important;
+                border: none !important; 
+                z-index: 10 !important; 
+                cursor: pointer;
             } 
-            .goto-btn { font-size: 16px; padding: 4px 6px; margin-left: 0; }
+            .goto-btn { 
+                font-size: 18px; 
+                padding: 0; 
+                margin: 0; 
+                z-index: 1; /* Lupa sedí pod neviditelným políčkem */
+            }
         }
     `;
     document.head.appendChild(styleEl);
@@ -251,22 +262,18 @@
 
             const go = () => { if (input.value) performScan(input.value); };
 
-            // 1. AUTO-JUMP: Start jump immediately when date is picked
+            // AUTO-JUMP: Start jump immediately when date is picked
             input.addEventListener('change', go);
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
             
-            // 2. MOBILE UX: Use magnifier to trigger native picker
+            // DESKTOP: Button click triggers search
             btn.addEventListener('click', (e) => { 
                 e.preventDefault(); 
-                if (window.innerWidth <= 600) {
-                    try { input.showPicker(); } catch(err) { input.focus(); }
-                } else {
-                    go(); 
-                }
+                if (window.innerWidth > 600) go(); 
             });
 
-            // 3. TOGGLE OVERLAY: Context menu / Long press to disable news
-            btn.addEventListener('contextmenu', (e) => {
+            // TOGGLE OVERLAY: Attaching to the container (li) catches long presses whether they hit the invisible input or the button
+            li.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
                 localStorage.setItem('gotot_skip_overlay', !skipOverlay);
