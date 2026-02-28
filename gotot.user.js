@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.1.5
+// @version      2.1.6
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -15,7 +15,7 @@
 (function() {
     'use strict';
 
-    // 1. Spolehlivá detekce mobilu (obchází chybějící viewport Okounu)
+    // 1. Spolehlivá detekce mobilu
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
     // 2. Styles
@@ -63,31 +63,11 @@
         #gotot-continue-btn { background: #d35400; color: #fff; display: none; }
         #gotot-continue-btn:hover { background: #e67e22; }
 
-        /* --- Mobile UX (aplikováno pouze přes JS třídu) --- */
-        li.gotot-mobile {
-            width: 32px; 
-            height: 32px;
-            justify-content: center;
-            margin-right: 5px;
-        }
-        li.gotot-mobile .goto-input { 
-            position: absolute !important; 
-            top: 0 !important; 
-            left: 0 !important; 
-            width: 100% !important; 
-            height: 100% !important; 
-            opacity: 0 !important; /* Políčko je neviditelné, ale 100% aktivní a překrývá lupu */
-            margin: 0 !important; 
-            padding: 0 !important; 
-            border: none !important; 
-            z-index: 10 !important; 
-            cursor: pointer;
-        } 
+        /* --- Mobile UX --- */
         li.gotot-mobile .goto-btn { 
             font-size: 18px; 
-            padding: 0; 
+            padding: 2px; 
             margin: 0; 
-            z-index: 1; /* Lupa pod inputem */
         }
     `;
     document.head.appendChild(styleEl);
@@ -247,38 +227,64 @@
     // --- Init ---
     function init() {
         const pagerNavs = document.querySelectorAll('.pager > ul.nav:first-of-type');
+        
+        // Vytvoříme jedno globální, zcela oddělené a schované políčko pro mobily
+        let globalHiddenInput = null;
+        if (isMobile) {
+            globalHiddenInput = document.createElement('input');
+            globalHiddenInput.type = 'date';
+            // Odstřelíme ho úplně mimo, aby nijak neovlivnilo vzhled
+            globalHiddenInput.style.cssText = 'position: absolute; top: -9999px; left: -9999px; opacity: 0; width: 1px; height: 1px; padding: 0; margin: 0; pointer-events: none; border: none;';
+            document.body.appendChild(globalHiddenInput);
+            
+            // Auto-jump pro mobilní kalendář
+            globalHiddenInput.addEventListener('change', () => { 
+                if (globalHiddenInput.value) performScan(globalHiddenInput.value); 
+            });
+        }
+
         pagerNavs.forEach(nav => {
             const li = document.createElement('li');
             li.className = 'goto-nav-item';
-            
-            // Javascriptová aplikace mobilního layoutu
-            if (isMobile) {
-                li.classList.add('gotot-mobile');
-            }
-            
-            const input = document.createElement('input');
-            input.type = 'date';
-            input.className = 'goto-input';
-            input.title = 'Vyber datum a leť!';
             
             const btn = document.createElement('button');
             btn.className = 'goto-btn';
             btn.innerHTML = '🔍';
             btn.title = 'Pravé tl. (nebo dlouhý stisk) pro nastavení overlaye';
 
-            const go = () => { if (input.value) performScan(input.value); };
+            if (isMobile) {
+                li.classList.add('gotot-mobile');
+                
+                // NA MOBILU VKLÁDÁME DO LIŠTY POUZE LUPU!
+                li.appendChild(btn);
 
-            // AUTO-JUMP: Přejít okamžitě po výběru z kalendáře
-            input.addEventListener('change', go);
-            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-            
-            // DESKTOP: Klik na lupu
-            btn.addEventListener('click', (e) => { 
-                e.preventDefault(); 
-                if (!isMobile) go(); 
-            });
+                // Klik na lupu provokuje schovaný globální input
+                btn.addEventListener('click', (e) => { 
+                    e.preventDefault(); 
+                    try { globalHiddenInput.showPicker(); } catch(err) { globalHiddenInput.focus(); }
+                });
+            } else {
+                // NA DESKTOPU VKLÁDÁME OBĚ POLOŽKY JAKO DŘÍV
+                const input = document.createElement('input');
+                input.type = 'date';
+                input.className = 'goto-input';
+                input.title = 'Vyber datum a leť!';
+                
+                const go = () => { if (input.value) performScan(input.value); };
 
-            // TOGGLE OVERLAY: Dlouhý stisk obalí celou položku (li)
+                input.addEventListener('change', go);
+                input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+                
+                btn.addEventListener('click', (e) => { 
+                    e.preventDefault(); 
+                    go(); 
+                });
+
+                li.appendChild(input);
+                li.appendChild(btn);
+            }
+
+            // TOGGLE OVERLAY: Dlouhý stisk funguje na celý obal kontejneru
             li.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
@@ -291,8 +297,6 @@
                 }
             });
 
-            li.appendChild(input);
-            li.appendChild(btn);
             nav.insertBefore(li, nav.firstChild);
         });
     }
