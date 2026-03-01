@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.4.0
+// @version      2.5.0
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -125,7 +125,6 @@
 
     // --- Helpers ---
     function parseCzechDate(dateStr) {
-        // Zvládne formát "3.června 2005 1:28" i "12. 2. 2022 5:58"
         const regex = /(\d+)\.\s*([a-zA-ZáčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]+|\d+\.)\s+(\d{4})(?:\s*,?\s*(\d{1,2}:\d{2}(?::\d{2})?))?/;
         const match = dateStr.match(regex);
         if (!match) return 0;
@@ -141,7 +140,7 @@
         if (months[monthStr] !== undefined) {
             mon = months[monthStr];
         } else if (!isNaN(parseInt(monthStr, 10))) {
-            mon = parseInt(monthStr, 10) - 1; // 1-based na 0-based
+            mon = parseInt(monthStr, 10) - 1;
         } else {
             return 0;
         }
@@ -179,7 +178,12 @@
         }, 5000);
     }
 
-    // --- Boundary Checking Logic ---
+    function updateStatus(textHtml) {
+        const statusEl = document.getElementById('gotot-status-text');
+        if (statusEl) statusEl.innerHTML = textHtml;
+    }
+
+    // --- Boundary Checking Logic (Po načtení stránky) ---
     function checkBoundaries() {
         const targetDateStr = sessionStorage.getItem('gotot_jump_target');
         if (!targetDateStr) return;
@@ -207,7 +211,7 @@
             const hasOlder = !!pager.querySelector('.older a, .oldest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Starší'));
             const hasNewer = !!pager.querySelector('.newer a, .newest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Novější'));
 
-            const margin = 86400000; // 24h tolerance
+            const margin = 86400000;
 
             if (targetTs < (oldest - margin) && !hasOlder) {
                 showToast("⏳ Klub v této době ještě neexistoval. Zobrazuji nejstarší dostupný záznam.");
@@ -230,11 +234,11 @@
         overlayEl.innerHTML = `
             <div id="gotot-modal">
                 <h3 class="gotot-modal-title">Stroj času <span id="gotot-hyena-date">${initDisplay}</span></h3>
-                <div id="gotot-hyena-content"><i>Načítám databázi zpráv...</i></div>
-                <div id="gotot-status-text">Přesun připraven...</div>
+                <div id="gotot-hyena-content"><i>Ověřuji časoprostor...</i></div>
+                <div id="gotot-status-text">Ověřuji existenci klubu v zadaném datu...</div>
                 <div class="gotot-buttons">
                     <button id="gotot-cancel-btn" class="gotot-action-btn">Zavřít zprávy</button>
-                    <button id="gotot-continue-btn" class="gotot-action-btn" style="display: block;">Dokončit skok</button>
+                    <button id="gotot-continue-btn" class="gotot-action-btn" style="display: none;">Dokončit skok</button>
                 </div>
             </div>`;
         document.body.appendChild(overlayEl);
@@ -334,12 +338,12 @@
             });
     }
 
-    // --- The "Native" Time Jump ---
-    function performScan(targetDateStr) {
+    // --- The Asynchronous "Native" Time Jump ---
+    async function performScan(targetDateStr) {
         const targetDate = new Date(targetDateStr);
         if (isNaN(targetDate.getTime())) return;
 
-        // Uložíme si cíl do paměti pro budoucí kontrolu hranic času
+        // Uložíme cíl pro zobrazení Toatsu na finální stránce
         sessionStorage.setItem('gotot_jump_target', targetDateStr);
 
         const okounParam = getOkounDateParam(targetDate);
@@ -353,10 +357,72 @@
         }
 
         createOverlay(targetDateStr);
-        fetchHyenaNews(targetDateStr);
         
+        try {
+            // Skryté ověření stránky na pozadí, abychom znali reálné hranice PŘED načtením zpráv
+            const response = await fetch(finalUrl);
+            const text = await response.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(text, 'text/html');
+
+            let newest = 0;
+            let oldest = Infinity;
+            
+            doc.querySelectorAll('.listing .item .permalink a.date').forEach(dEl => {
+                const textContent = dEl.innerText || dEl.textContent;
+                const ts = parseCzechDate(textContent.trim());
+                if (ts > 0) {
+                    if (ts > newest) newest = ts;
+                    if (ts < oldest) oldest = ts;
+                }
+            });
+
+            const pager = doc.querySelector('.pager');
+            let hasOlder = false;
+            let hasNewer = false;
+            if (pager) {
+                hasOlder = !!pager.querySelector('.older a, .oldest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Starší'));
+                hasNewer = !!pager.querySelector('.newer a, .newest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Novější'));
+            }
+
+            const targetTs = targetDate.getTime();
+            const margin = 86400000;
+            let adjustedTargetStr = targetDateStr;
+            let boundaryMsg = "";
+
+            if (oldest !== Infinity && newest !== 0) {
+                if (targetTs < (oldest - margin) && !hasOlder) {
+                    boundaryMsg = "<span style='color:#e74c3c;'>Klub v této době ještě neexistoval. Zobrazuji zprávy pro nejstarší dostupný záznam.</span><br><br>";
+                    const d = new Date(oldest);
+                    adjustedTargetStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                } else if (targetTs > (newest + margin) && !hasNewer) {
+                    boundaryMsg = "<span style='color:#e74c3c;'>Hledáte příliš v budoucnosti. Zobrazuji zprávy pro nejnovější dostupný záznam.</span><br><br>";
+                    const d = new Date(newest);
+                    adjustedTargetStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                }
+            }
+
+            // Pokud jsme narazili na okraj času, upravíme i zobrazené datum v hlavičce
+            if (adjustedTargetStr !== targetDateStr) {
+                const initDisplay = formatCzechDate(new Date(adjustedTargetStr));
+                const dateSpan = document.getElementById('gotot-hyena-date');
+                if (dateSpan) dateSpan.innerHTML = initDisplay;
+            }
+
+            // Teprve TEĎ stahujeme zprávy z Hyeny na základě ověřeného (nebo původního) data
+            fetchHyenaNews(adjustedTargetStr);
+            updateStatus(boundaryMsg + "Přesun připraven!");
+
+        } catch (err) {
+            console.error("GoToT Verification Error", err);
+            // Fallback v případě výpadku sítě - načteme zprávy bez ověření
+            fetchHyenaNews(targetDateStr);
+            updateStatus("Přesun připraven!");
+        }
+
         const continueBtn = document.getElementById('gotot-continue-btn');
         if (continueBtn) {
+            continueBtn.style.display = 'block';
             continueBtn.onclick = () => { window.location.href = finalUrl; };
         }
     }
@@ -400,18 +466,18 @@
                 <div class="gotot-menu-item" id="gotot-menu-theme">
                     <span>Téma okna:</span> <strong style="color: #2980b9">${light ? 'SVĚTLÉ' : 'TMAVÉ'}</strong>
                 </div>
-                <div class="gotot-menu-version">GoToT v2.4.0</div>
+                <div class="gotot-menu-version">GoToT v2.5.0</div>
             `;
             
-            document.getElementById('gotot-menu-news').onclick = (ev) => {
+            menu.querySelector('#gotot-menu-news').onclick = (ev) => {
                 ev.stopPropagation();
                 localStorage.setItem('gotot_skip_overlay', !skip);
-                renderMenuContent();
+                menu.remove(); 
             };
-            document.getElementById('gotot-menu-theme').onclick = (ev) => {
+            menu.querySelector('#gotot-menu-theme').onclick = (ev) => {
                 ev.stopPropagation();
                 localStorage.setItem('gotot_light_theme', !light);
-                renderMenuContent();
+                menu.remove(); 
             };
         }
         
@@ -465,7 +531,6 @@
                 li.appendChild(btn);
             }
 
-            // Napojení nového kontextového menu
             li.addEventListener('contextmenu', (e) => handleContextMenu(e, li));
 
             nav.insertBefore(li, nav.firstChild);
