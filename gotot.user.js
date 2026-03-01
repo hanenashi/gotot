@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.6.1
+// @version      2.6.2
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -511,10 +511,9 @@
                     <span>Vstupní formát:</span> <strong style="color: #f39c12">${format}</strong>
                 </div>
                 ` : ''}
-                <div class="gotot-menu-version">GoToT v2.6.1</div>
+                <div class="gotot-menu-version">GoToT v2.6.2</div>
             `;
             
-            // Onclick events - now they just cycle and re-render the menu
             menu.querySelector('#gotot-menu-news').onclick = (ev) => {
                 ev.stopPropagation();
                 localStorage.setItem('gotot_skip_overlay', !skip);
@@ -541,21 +540,18 @@
         renderMenuContent();
         document.body.appendChild(menu);
 
-        // Funkce pro bezpečné zavření menu
         function closeMenu() {
             if (menu) menu.remove();
             document.removeEventListener('click', clickOut);
             document.removeEventListener('keydown', escapeOut);
         }
 
-        // Event listener pro kliknutí mimo menu
         function clickOut(ev) {
             if (menu && !menu.contains(ev.target)) {
                 closeMenu();
             }
         }
 
-        // Event listener pro klávesu Escape
         function escapeOut(ev) {
             if (ev.key === 'Escape') {
                 closeMenu();
@@ -591,6 +587,14 @@
                 input.addEventListener('change', () => { 
                     if (input.value) performScan(new Date(input.value)); 
                 });
+                
+                // Přidáno preventDefault i na mobil
+                input.addEventListener('keydown', (e) => { 
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (input.value) performScan(new Date(input.value)); 
+                    }
+                });
 
                 li.appendChild(input);
                 li.appendChild(btn);
@@ -610,7 +614,14 @@
                     }
                 };
 
-                input.addEventListener('keydown', (e) => { if (e.key === 'Enter') goDesktop(); });
+                // OPRAVA: Zabránění odeslání formuláře při stisku Enter
+                input.addEventListener('keydown', (e) => { 
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        goDesktop();
+                    } 
+                });
+                
                 btn.addEventListener('click', (e) => { e.preventDefault(); goDesktop(); });
 
                 li.appendChild(input);
