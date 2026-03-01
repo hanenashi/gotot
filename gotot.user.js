@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.5.0
+// @version      2.6.0
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -20,6 +20,8 @@
     const isMobileUA = /Mobi|Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     const isMobile = isTouchDevice || isMobileUA;
 
+    const FORMATS = ['DD.MM.YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD'];
+
     // 2. Styles
     const styleEl = document.createElement('style');
     styleEl.textContent = `
@@ -30,7 +32,7 @@
         .goto-input {
             background: #ffffff; border: 1px solid #aaa; color: #000;
             font-family: Arial, sans-serif; font-size: 11px;
-            padding: 2px 4px; border-radius: 3px; outline: none; width: 115px;
+            padding: 2px 4px; border-radius: 3px; outline: none; width: 115px; transition: border-color 0.3s;
         }
         .goto-input:focus { border-color: #d35400; }
         
@@ -132,25 +134,20 @@
         const day = parseInt(match[1], 10);
         let monthStr = match[2].toLowerCase().replace('.', '').trim();
         const year = parseInt(match[3], 10);
-        const timeStr = match[4] || "00:00:00";
         
         const months = {'ledna':0,'února':1,'března':2,'dubna':3,'května':4,'června':5,'července':6,'srpna':7,'září':8,'října':9,'listopadu':10,'prosince':11};
-        
         let mon;
-        if (months[monthStr] !== undefined) {
-            mon = months[monthStr];
-        } else if (!isNaN(parseInt(monthStr, 10))) {
-            mon = parseInt(monthStr, 10) - 1;
-        } else {
-            return 0;
-        }
+        if (months[monthStr] !== undefined) mon = months[monthStr];
+        else if (!isNaN(parseInt(monthStr, 10))) mon = parseInt(monthStr, 10) - 1;
+        else return 0;
 
-        const timeParts = timeStr.split(':');
-        const h = parseInt(timeParts[0] || 0, 10);
-        const m = parseInt(timeParts[1] || 0, 10);
-        const s = parseInt(timeParts[2] || 0, 10);
-        
-        return new Date(year, mon, day, h, m, s).getTime();
+        return new Date(year, mon, day, 0, 0, 0).getTime();
+    }
+
+    function parseUrlDate(url) {
+        const match = url.match(/[?&]f=(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
+        if (match) return new Date(match[1], match[2]-1, match[3], match[4], match[5], match[6]).getTime();
+        return null;
     }
 
     function formatCzechDate(dateObj) {
@@ -166,6 +163,45 @@
         return `${yyyy}${mm}${dd}-000000`;
     }
 
+    function getIsoDateStr(ts) {
+        const d = new Date(ts);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    // --- Desktop Text Input Parser ---
+    function parseManualTextDate(inputStr) {
+        const format = localStorage.getItem('gotot_date_format') || 'DD.MM.YYYY';
+        let clean = inputStr.replace(/\D/g, ''); // Odstraní tečky a lomítka pro plynulé psaní
+        let d, m, y;
+
+        if (clean.length === 8) {
+            if (format === 'DD.MM.YYYY') { d = clean.slice(0,2); m = clean.slice(2,4); y = clean.slice(4,8); }
+            else if (format === 'MM/DD/YYYY') { m = clean.slice(0,2); d = clean.slice(2,4); y = clean.slice(4,8); }
+            else if (format === 'YYYY-MM-DD') { y = clean.slice(0,4); m = clean.slice(4,6); d = clean.slice(6,8); }
+        } else {
+            // Pokud uživatel poctivě napsal oddělovače (tečky, lomítka, pomlčky)
+            let parts = inputStr.split(/[\.\-\/]/).filter(p => p.trim() !== '');
+            if (parts.length === 3) {
+                if (format === 'DD.MM.YYYY') { d = parts[0]; m = parts[1]; y = parts[2]; }
+                else if (format === 'MM/DD/YYYY') { m = parts[0]; d = parts[1]; y = parts[2]; }
+                else if (format === 'YYYY-MM-DD') { y = parts[0]; m = parts[1]; d = parts[2]; }
+            } else {
+                return null;
+            }
+        }
+
+        if (!y || !m || !d) return null;
+        y = parseInt(y, 10);
+        m = parseInt(m, 10) - 1;
+        d = parseInt(d, 10);
+        
+        if (y < 100) y += 2000; // Podpora pro dvouciferné roky
+        const dateObj = new Date(y, m, d);
+        if (isNaN(dateObj.getTime())) return null;
+        return dateObj;
+    }
+
+    // --- Toasts & Status ---
     function showToast(msg) {
         const toast = document.createElement('div');
         toast.id = 'gotot-toast';
@@ -183,7 +219,6 @@
         if (statusEl) statusEl.innerHTML = textHtml;
     }
 
-    // --- Boundary Checking Logic (Po načtení stránky) ---
     function checkBoundaries() {
         const targetDateStr = sessionStorage.getItem('gotot_jump_target');
         if (!targetDateStr) return;
@@ -196,8 +231,7 @@
         let oldest = Infinity;
         
         document.querySelectorAll('.listing .item .permalink a.date').forEach(dEl => {
-            const text = dEl.innerText || dEl.textContent;
-            const ts = parseCzechDate(text.trim());
+            const ts = parseCzechDate((dEl.innerText || dEl.textContent).trim());
             if (ts > 0) {
                 if (ts > newest) newest = ts;
                 if (ts < oldest) oldest = ts;
@@ -211,7 +245,7 @@
             const hasOlder = !!pager.querySelector('.older a, .oldest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Starší'));
             const hasNewer = !!pager.querySelector('.newer a, .newest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Novější'));
 
-            const margin = 86400000;
+            const margin = 86400000; // 24h
 
             if (targetTs < (oldest - margin) && !hasOlder) {
                 showToast("⏳ Klub v této době ještě neexistoval. Zobrazuji nejstarší dostupný záznam.");
@@ -224,10 +258,10 @@
     // --- UI Management (The News Overlay) ---
     let overlayEl = null;
 
-    function createOverlay(targetDateStr) {
+    function createOverlay(targetDateObj) {
         if (overlayEl) return;
         
-        const initDisplay = formatCzechDate(new Date(targetDateStr));
+        const initDisplay = formatCzechDate(targetDateObj);
         
         overlayEl = document.createElement('div');
         overlayEl.id = 'gotot-overlay';
@@ -235,9 +269,9 @@
             <div id="gotot-modal">
                 <h3 class="gotot-modal-title">Stroj času <span id="gotot-hyena-date">${initDisplay}</span></h3>
                 <div id="gotot-hyena-content"><i>Ověřuji časoprostor...</i></div>
-                <div id="gotot-status-text">Ověřuji existenci klubu v zadaném datu...</div>
+                <div id="gotot-status-text">Skener prohledává zadané datum...</div>
                 <div class="gotot-buttons">
-                    <button id="gotot-cancel-btn" class="gotot-action-btn">Zavřít zprávy</button>
+                    <button id="gotot-cancel-btn" class="gotot-action-btn">Zrušit skok</button>
                     <button id="gotot-continue-btn" class="gotot-action-btn" style="display: none;">Dokončit skok</button>
                 </div>
             </div>`;
@@ -260,8 +294,8 @@
     // --- Data Fetching (Vanilla Fetch API) ---
     let hyenaDBCache = {}; 
 
-    function fetchHyenaNews(targetDateStr) {
-        const d = new Date(targetDateStr);
+    function fetchHyenaNews(isoTargetDateStr) {
+        const d = new Date(isoTargetDateStr);
         const yyyy = d.getFullYear();
         const mm = String(d.getMonth() + 1).padStart(2, '0');
         const dd = String(d.getDate()).padStart(2, '0');
@@ -288,7 +322,6 @@
                         bestKey = key;
                     } 
                 }
-
                 if (bestKey) {
                     newsItems = yearDB[bestKey];
                     foundKey = bestKey;
@@ -297,8 +330,7 @@
 
             const dateSpan = document.getElementById('gotot-hyena-date');
             if (foundKey !== searchKey && dateSpan) {
-                let displayDate = formatCzechDate(new Date(foundKey));
-                dateSpan.innerHTML = `${displayDate} <span style="font-size:12px; color:#f39c12; margin-left:5px;">(nejbližší vydání)</span>`;
+                dateSpan.innerHTML = `${formatCzechDate(new Date(foundKey))} <span style="font-size:12px; color:#f39c12; margin-left:5px;">(nejbližší vydání)</span>`;
             }
 
             if (newsItems && newsItems.length > 0) {
@@ -317,11 +349,9 @@
         }
 
         const archiveUrl = `https://raw.githubusercontent.com/hanenashi/gotot/main/db/hyena_${yyyy}.json`;
-
         fetch(archiveUrl)
             .then(response => {
-                if (response.status === 404) throw new Error("404");
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) throw new Error("404");
                 return response.json();
             })
             .then(data => {
@@ -329,101 +359,120 @@
                 renderNews(hyenaDBCache[yyyy]);
             })
             .catch(error => {
-                if (error.message === "404") {
-                    contentEl.innerHTML = `<i>Databáze zpráv pro rok ${yyyy} zatím nebyla nalezena.</i>`;
-                } else {
-                    contentEl.innerHTML = `<i>Nepodařilo se připojit k databázi zpráv.</i>`;
-                    console.error("GoToT Fetch Error:", error);
-                }
+                contentEl.innerHTML = `<i>Databáze zpráv pro rok ${yyyy} zatím nebyla nalezena.</i>`;
             });
     }
 
     // --- The Asynchronous "Native" Time Jump ---
-    async function performScan(targetDateStr) {
-        const targetDate = new Date(targetDateStr);
-        if (isNaN(targetDate.getTime())) return;
-
-        // Uložíme cíl pro zobrazení Toatsu na finální stránce
-        sessionStorage.setItem('gotot_jump_target', targetDateStr);
-
-        const okounParam = getOkounDateParam(targetDate);
+    async function performScan(targetDateObj) {
+        const okounParam = getOkounDateParam(targetDateObj);
         const cleanBaseUrl = window.location.href.split('?')[0].split('#')[0];
-        const finalUrl = `${cleanBaseUrl}?f=${okounParam}`;
+        let finalUrl = `${cleanBaseUrl}?f=${okounParam}`;
 
-        let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
-        if (skipOverlay) {
-            window.location.href = finalUrl;
-            return;
+        const skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
+        
+        if (!skipOverlay) {
+            createOverlay(targetDateObj);
         }
 
-        createOverlay(targetDateStr);
-        
         try {
-            // Skryté ověření stránky na pozadí, abychom znali reálné hranice PŘED načtením zpráv
+            // Skryté ověření stránky na pozadí PŘED načtením zpráv
             const response = await fetch(finalUrl);
             const text = await response.text();
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
 
-            let newest = 0;
-            let oldest = Infinity;
-            
-            doc.querySelectorAll('.listing .item .permalink a.date').forEach(dEl => {
-                const textContent = dEl.innerText || dEl.textContent;
-                const ts = parseCzechDate(textContent.trim());
-                if (ts > 0) {
-                    if (ts > newest) newest = ts;
-                    if (ts < oldest) oldest = ts;
-                }
-            });
-
-            const pager = doc.querySelector('.pager');
-            let hasOlder = false;
-            let hasNewer = false;
-            if (pager) {
-                hasOlder = !!pager.querySelector('.older a, .oldest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Starší'));
-                hasNewer = !!pager.querySelector('.newer a, .newest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Novější'));
-            }
-
-            const targetTs = targetDate.getTime();
-            const margin = 86400000;
-            let adjustedTargetStr = targetDateStr;
+            const items = doc.querySelectorAll('.listing .item');
+            let adjustedTargetIsoStr = getIsoDateStr(targetDateObj.getTime());
             let boundaryMsg = "";
 
-            if (oldest !== Infinity && newest !== 0) {
-                if (targetTs < (oldest - margin) && !hasOlder) {
-                    boundaryMsg = "<span style='color:#e74c3c;'>Klub v této době ještě neexistoval. Zobrazuji zprávy pro nejstarší dostupný záznam.</span><br><br>";
-                    const d = new Date(oldest);
-                    adjustedTargetStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-                } else if (targetTs > (newest + margin) && !hasNewer) {
-                    boundaryMsg = "<span style='color:#e74c3c;'>Hledáte příliš v budoucnosti. Zobrazuji zprávy pro nejnovější dostupný záznam.</span><br><br>";
-                    const d = new Date(newest);
-                    adjustedTargetStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+            if (items.length === 0) {
+                // OPRAVA 1: Zcela prázdná stránka znamená, že jsme přeskočili budoucnost klubu.
+                // Vracíme se na nejnovější dostupnou stránku.
+                const newestBtn = document.querySelector('.pager .newest a') || document.querySelector('.pager a[href*="f="]');
+                if (newestBtn) {
+                    finalUrl = newestBtn.href;
+                    const parsedNewestTs = parseUrlDate(finalUrl);
+                    if (parsedNewestTs) {
+                        adjustedTargetIsoStr = getIsoDateStr(parsedNewestTs);
+                    } else {
+                        // Nouzový fallback na aktuální reálný čas
+                        adjustedTargetIsoStr = getIsoDateStr(Date.now());
+                    }
+                } else {
+                    finalUrl = window.location.href; // Není kam, zůstáváme
+                }
+                boundaryMsg = "<span style='color:#e74c3c;'>Hledáte v prázdné budoucnosti. Zobrazuji nejnovější dostupný záznam.</span><br><br>";
+            } else {
+                // OPRAVA 2: Stránka není prázdná, zkontrolujeme okraje
+                let newest = 0;
+                let oldest = Infinity;
+                
+                items.forEach(item => {
+                    const dEl = item.querySelector('.permalink a.date');
+                    if (dEl) {
+                        const ts = parseCzechDate((dEl.innerText || dEl.textContent).trim());
+                        if (ts > 0) {
+                            if (ts > newest) newest = ts;
+                            if (ts < oldest) oldest = ts;
+                        }
+                    }
+                });
+
+                const pager = doc.querySelector('.pager');
+                let hasOlder = false;
+                let hasNewer = false;
+                if (pager) {
+                    hasOlder = !!pager.querySelector('.older a, .oldest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Starší'));
+                    hasNewer = !!pager.querySelector('.newer a, .newest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Novější'));
+                }
+
+                const targetTs = targetDateObj.getTime();
+                const margin = 86400000; // 24h
+
+                if (oldest !== Infinity && newest !== 0) {
+                    if (targetTs < (oldest - margin) && !hasOlder) {
+                        boundaryMsg = "<span style='color:#e74c3c;'>Klub v této době ještě neexistoval. Zobrazuji nejstarší dostupný záznam.</span><br><br>";
+                        adjustedTargetIsoStr = getIsoDateStr(oldest);
+                    } else if (targetTs > (newest + margin) && !hasNewer) {
+                        boundaryMsg = "<span style='color:#e74c3c;'>Hledáte příliš v budoucnosti. Zobrazuji nejnovější dostupný záznam.</span><br><br>";
+                        adjustedTargetIsoStr = getIsoDateStr(newest);
+                    }
                 }
             }
 
-            // Pokud jsme narazili na okraj času, upravíme i zobrazené datum v hlavičce
-            if (adjustedTargetStr !== targetDateStr) {
-                const initDisplay = formatCzechDate(new Date(adjustedTargetStr));
-                const dateSpan = document.getElementById('gotot-hyena-date');
-                if (dateSpan) dateSpan.innerHTML = initDisplay;
-            }
+            // Uložíme finální datum pro zobrazení Toatsu na nové stránce
+            sessionStorage.setItem('gotot_jump_target', adjustedTargetIsoStr);
 
-            // Teprve TEĎ stahujeme zprávy z Hyeny na základě ověřeného (nebo původního) data
-            fetchHyenaNews(adjustedTargetStr);
-            updateStatus(boundaryMsg + "Přesun připraven!");
+            if (!skipOverlay) {
+                // Pokud jsme narazili na okraj času, upravíme i zobrazené datum v hlavičce
+                if (adjustedTargetIsoStr !== getIsoDateStr(targetDateObj.getTime())) {
+                    const dateSpan = document.getElementById('gotot-hyena-date');
+                    if (dateSpan) dateSpan.innerHTML = formatCzechDate(new Date(adjustedTargetIsoStr));
+                }
+
+                // Stahujeme zprávy z Hyeny na základě ověřeného (nebo opraveného) data
+                fetchHyenaNews(adjustedTargetIsoStr);
+                updateStatus(boundaryMsg + "Přesun připraven!");
+            }
 
         } catch (err) {
             console.error("GoToT Verification Error", err);
             // Fallback v případě výpadku sítě - načteme zprávy bez ověření
-            fetchHyenaNews(targetDateStr);
-            updateStatus("Přesun připraven!");
+            if (!skipOverlay) {
+                fetchHyenaNews(getIsoDateStr(targetDateObj.getTime()));
+                updateStatus("Přesun připraven! (bez ověření hranic)");
+            }
         }
 
-        const continueBtn = document.getElementById('gotot-continue-btn');
-        if (continueBtn) {
-            continueBtn.style.display = 'block';
-            continueBtn.onclick = () => { window.location.href = finalUrl; };
+        if (skipOverlay) {
+            window.location.href = finalUrl;
+        } else {
+            const continueBtn = document.getElementById('gotot-continue-btn');
+            if (continueBtn) {
+                continueBtn.style.display = 'block';
+                continueBtn.onclick = () => { window.location.href = finalUrl; };
+            }
         }
     }
 
@@ -455,6 +504,7 @@
         function renderMenuContent() {
             const skip = localStorage.getItem('gotot_skip_overlay') === 'true';
             const light = localStorage.getItem('gotot_light_theme') === 'true';
+            const format = localStorage.getItem('gotot_date_format') || 'DD.MM.YYYY';
             
             if (light) menu.classList.add('gotot-light-menu');
             else menu.classList.remove('gotot-light-menu');
@@ -466,7 +516,12 @@
                 <div class="gotot-menu-item" id="gotot-menu-theme">
                     <span>Téma okna:</span> <strong style="color: #2980b9">${light ? 'SVĚTLÉ' : 'TMAVÉ'}</strong>
                 </div>
-                <div class="gotot-menu-version">GoToT v2.5.0</div>
+                ${!isMobile ? `
+                <div class="gotot-menu-item" id="gotot-menu-format">
+                    <span>Vstupní formát:</span> <strong style="color: #f39c12">${format}</strong>
+                </div>
+                ` : ''}
+                <div class="gotot-menu-version">GoToT v2.6.0</div>
             `;
             
             menu.querySelector('#gotot-menu-news').onclick = (ev) => {
@@ -479,6 +534,18 @@
                 localStorage.setItem('gotot_light_theme', !light);
                 menu.remove(); 
             };
+            
+            if (!isMobile) {
+                menu.querySelector('#gotot-menu-format').onclick = (ev) => {
+                    ev.stopPropagation();
+                    let nextIdx = (FORMATS.indexOf(format) + 1) % FORMATS.length;
+                    let newFormat = FORMATS[nextIdx];
+                    localStorage.setItem('gotot_date_format', newFormat);
+                    // Aktualizujeme i text placeholderu v políčkách
+                    document.querySelectorAll('.goto-input').forEach(inp => inp.placeholder = newFormat);
+                    renderMenuContent(); 
+                };
+            }
         }
         
         renderMenuContent();
@@ -503,36 +570,49 @@
             const li = document.createElement('li');
             li.className = 'goto-nav-item';
             
-            const input = document.createElement('input');
-            input.type = 'date';
-            input.className = 'goto-input';
-            input.title = 'Vyber datum a leť!';
-            
             const btn = document.createElement('button');
             btn.className = 'goto-btn';
             btn.innerHTML = '🔍';
-            btn.title = 'Pravé tl. (nebo dlouhý stisk) pro nastavení skoků';
-
-            const go = () => { if (input.value) performScan(input.value); };
-
-            input.addEventListener('change', go);
-            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+            btn.title = 'Pravé tl. (nebo dlouhý stisk) pro menu';
 
             if (isMobile) {
+                // MOBIL: Původní nativní <input type="date"> 
                 li.classList.add('gotot-mobile');
+                const input = document.createElement('input');
+                input.type = 'date';
+                input.className = 'goto-input';
+                
+                input.addEventListener('change', () => { 
+                    if (input.value) performScan(new Date(input.value)); 
+                });
+
                 li.appendChild(input);
                 li.appendChild(btn);
             } else {
-                btn.addEventListener('click', (e) => { 
-                    e.preventDefault(); 
-                    go(); 
-                });
+                // DESKTOP: Vlastní textové políčko pro chytré formátování a ochranu proti auto-jump
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'goto-input';
+                input.placeholder = localStorage.getItem('gotot_date_format') || 'DD.MM.YYYY';
+                
+                const goDesktop = () => {
+                    const parsedDate = parseManualTextDate(input.value);
+                    if (parsedDate) {
+                        performScan(parsedDate);
+                    } else {
+                        input.style.borderColor = 'red';
+                        setTimeout(() => input.style.borderColor = '#aaa', 800);
+                    }
+                };
+
+                input.addEventListener('keydown', (e) => { if (e.key === 'Enter') goDesktop(); });
+                btn.addEventListener('click', (e) => { e.preventDefault(); goDesktop(); });
+
                 li.appendChild(input);
                 li.appendChild(btn);
             }
 
             li.addEventListener('contextmenu', (e) => handleContextMenu(e, li));
-
             nav.insertBefore(li, nav.firstChild);
         });
     }
