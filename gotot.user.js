@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.6.0
+// @version      2.6.1
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -171,7 +171,7 @@
     // --- Desktop Text Input Parser ---
     function parseManualTextDate(inputStr) {
         const format = localStorage.getItem('gotot_date_format') || 'DD.MM.YYYY';
-        let clean = inputStr.replace(/\D/g, ''); // Odstraní tečky a lomítka pro plynulé psaní
+        let clean = inputStr.replace(/\D/g, ''); 
         let d, m, y;
 
         if (clean.length === 8) {
@@ -179,7 +179,6 @@
             else if (format === 'MM/DD/YYYY') { m = clean.slice(0,2); d = clean.slice(2,4); y = clean.slice(4,8); }
             else if (format === 'YYYY-MM-DD') { y = clean.slice(0,4); m = clean.slice(4,6); d = clean.slice(6,8); }
         } else {
-            // Pokud uživatel poctivě napsal oddělovače (tečky, lomítka, pomlčky)
             let parts = inputStr.split(/[\.\-\/]/).filter(p => p.trim() !== '');
             if (parts.length === 3) {
                 if (format === 'DD.MM.YYYY') { d = parts[0]; m = parts[1]; y = parts[2]; }
@@ -195,7 +194,7 @@
         m = parseInt(m, 10) - 1;
         d = parseInt(d, 10);
         
-        if (y < 100) y += 2000; // Podpora pro dvouciferné roky
+        if (y < 100) y += 2000; 
         const dateObj = new Date(y, m, d);
         if (isNaN(dateObj.getTime())) return null;
         return dateObj;
@@ -245,7 +244,7 @@
             const hasOlder = !!pager.querySelector('.older a, .oldest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Starší'));
             const hasNewer = !!pager.querySelector('.newer a, .newest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Novější'));
 
-            const margin = 86400000; // 24h
+            const margin = 86400000;
 
             if (targetTs < (oldest - margin) && !hasOlder) {
                 showToast("⏳ Klub v této době ještě neexistoval. Zobrazuji nejstarší dostupný záznam.");
@@ -376,7 +375,6 @@
         }
 
         try {
-            // Skryté ověření stránky na pozadí PŘED načtením zpráv
             const response = await fetch(finalUrl);
             const text = await response.text();
             const parser = new DOMParser();
@@ -387,8 +385,6 @@
             let boundaryMsg = "";
 
             if (items.length === 0) {
-                // OPRAVA 1: Zcela prázdná stránka znamená, že jsme přeskočili budoucnost klubu.
-                // Vracíme se na nejnovější dostupnou stránku.
                 const newestBtn = document.querySelector('.pager .newest a') || document.querySelector('.pager a[href*="f="]');
                 if (newestBtn) {
                     finalUrl = newestBtn.href;
@@ -396,15 +392,13 @@
                     if (parsedNewestTs) {
                         adjustedTargetIsoStr = getIsoDateStr(parsedNewestTs);
                     } else {
-                        // Nouzový fallback na aktuální reálný čas
                         adjustedTargetIsoStr = getIsoDateStr(Date.now());
                     }
                 } else {
-                    finalUrl = window.location.href; // Není kam, zůstáváme
+                    finalUrl = window.location.href; 
                 }
                 boundaryMsg = "<span style='color:#e74c3c;'>Hledáte v prázdné budoucnosti. Zobrazuji nejnovější dostupný záznam.</span><br><br>";
             } else {
-                // OPRAVA 2: Stránka není prázdná, zkontrolujeme okraje
                 let newest = 0;
                 let oldest = Infinity;
                 
@@ -428,7 +422,7 @@
                 }
 
                 const targetTs = targetDateObj.getTime();
-                const margin = 86400000; // 24h
+                const margin = 86400000; 
 
                 if (oldest !== Infinity && newest !== 0) {
                     if (targetTs < (oldest - margin) && !hasOlder) {
@@ -441,24 +435,20 @@
                 }
             }
 
-            // Uložíme finální datum pro zobrazení Toatsu na nové stránce
             sessionStorage.setItem('gotot_jump_target', adjustedTargetIsoStr);
 
             if (!skipOverlay) {
-                // Pokud jsme narazili na okraj času, upravíme i zobrazené datum v hlavičce
                 if (adjustedTargetIsoStr !== getIsoDateStr(targetDateObj.getTime())) {
                     const dateSpan = document.getElementById('gotot-hyena-date');
                     if (dateSpan) dateSpan.innerHTML = formatCzechDate(new Date(adjustedTargetIsoStr));
                 }
 
-                // Stahujeme zprávy z Hyeny na základě ověřeného (nebo opraveného) data
                 fetchHyenaNews(adjustedTargetIsoStr);
                 updateStatus(boundaryMsg + "Přesun připraven!");
             }
 
         } catch (err) {
             console.error("GoToT Verification Error", err);
-            // Fallback v případě výpadku sítě - načteme zprávy bez ověření
             if (!skipOverlay) {
                 fetchHyenaNews(getIsoDateStr(targetDateObj.getTime()));
                 updateStatus("Přesun připraven! (bez ověření hranic)");
@@ -521,18 +511,19 @@
                     <span>Vstupní formát:</span> <strong style="color: #f39c12">${format}</strong>
                 </div>
                 ` : ''}
-                <div class="gotot-menu-version">GoToT v2.6.0</div>
+                <div class="gotot-menu-version">GoToT v2.6.1</div>
             `;
             
+            // Onclick events - now they just cycle and re-render the menu
             menu.querySelector('#gotot-menu-news').onclick = (ev) => {
                 ev.stopPropagation();
                 localStorage.setItem('gotot_skip_overlay', !skip);
-                menu.remove(); 
+                renderMenuContent(); 
             };
             menu.querySelector('#gotot-menu-theme').onclick = (ev) => {
                 ev.stopPropagation();
                 localStorage.setItem('gotot_light_theme', !light);
-                menu.remove(); 
+                renderMenuContent(); 
             };
             
             if (!isMobile) {
@@ -541,7 +532,6 @@
                     let nextIdx = (FORMATS.indexOf(format) + 1) % FORMATS.length;
                     let newFormat = FORMATS[nextIdx];
                     localStorage.setItem('gotot_date_format', newFormat);
-                    // Aktualizujeme i text placeholderu v políčkách
                     document.querySelectorAll('.goto-input').forEach(inp => inp.placeholder = newFormat);
                     renderMenuContent(); 
                 };
@@ -551,13 +541,30 @@
         renderMenuContent();
         document.body.appendChild(menu);
 
+        // Funkce pro bezpečné zavření menu
+        function closeMenu() {
+            if (menu) menu.remove();
+            document.removeEventListener('click', clickOut);
+            document.removeEventListener('keydown', escapeOut);
+        }
+
+        // Event listener pro kliknutí mimo menu
+        function clickOut(ev) {
+            if (menu && !menu.contains(ev.target)) {
+                closeMenu();
+            }
+        }
+
+        // Event listener pro klávesu Escape
+        function escapeOut(ev) {
+            if (ev.key === 'Escape') {
+                closeMenu();
+            }
+        }
+
         setTimeout(() => {
-            document.addEventListener('click', function clickOut(ev) {
-                if (menu && !menu.contains(ev.target)) {
-                    menu.remove();
-                    document.removeEventListener('click', clickOut);
-                }
-            });
+            document.addEventListener('click', clickOut);
+            document.addEventListener('keydown', escapeOut);
         }, 50);
     }
 
@@ -576,7 +583,6 @@
             btn.title = 'Pravé tl. (nebo dlouhý stisk) pro menu';
 
             if (isMobile) {
-                // MOBIL: Původní nativní <input type="date"> 
                 li.classList.add('gotot-mobile');
                 const input = document.createElement('input');
                 input.type = 'date';
@@ -589,7 +595,6 @@
                 li.appendChild(input);
                 li.appendChild(btn);
             } else {
-                // DESKTOP: Vlastní textové políčko pro chytré formátování a ochranu proti auto-jump
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.className = 'goto-input';
