@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GoToT
 // @namespace    http://tampermonkey.net/
-// @version      2.3.0
+// @version      2.4.0
 // @description  Adds a "Go To Date" navigation to pagers on Okoun.cz with a JSON-backed Hyena news overlay
 // @author       kokochan
 // @match        https://www.okoun.cz/boards/*
@@ -40,7 +40,7 @@
         }
         .goto-btn:hover { color: #d35400; }
 
-        /* --- Overlay Styles --- */
+        /* --- Overlay Styles (DARK) --- */
         #gotot-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(8px);
@@ -50,7 +50,7 @@
         #gotot-modal {
             background: #1a1a1a; border: 2px solid #d35400; border-radius: 6px;
             width: 90%; max-width: 550px; padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
-            color: #ccc;
+            color: #ccc; transition: all 0.3s ease;
         }
         .gotot-modal-title { margin: 0 0 15px 0; color: #d35400; font-size: 18px; border-bottom: 1px solid #333; padding-bottom: 10px; }
         #gotot-hyena-date { color: #888; font-size: 13px; float: right; margin-top: 4px; }
@@ -65,42 +65,95 @@
         #gotot-continue-btn { background: #d35400; color: #fff; display: none; }
         #gotot-continue-btn:hover { background: #e67e22; }
 
+        /* --- Overlay Styles (LIGHT) --- */
+        #gotot-modal.gotot-light {
+            background: #fdfdfd; border-color: #d35400; color: #333;
+        }
+        #gotot-modal.gotot-light .gotot-modal-title { border-bottom-color: #ddd; }
+        #gotot-modal.gotot-light #gotot-hyena-date { color: #666; }
+        #gotot-modal.gotot-light .gotot-hyena-list { color: #444; }
+        #gotot-modal.gotot-light #gotot-status-text { color: #111; }
+        #gotot-modal.gotot-light #gotot-cancel-btn { background: #ccc; color: #222; }
+        #gotot-modal.gotot-light #gotot-cancel-btn:hover { background: #bbb; }
+
+        /* --- Custom Context Menu --- */
+        #gotot-context-menu {
+            position: absolute; z-index: 9999999; min-width: 190px;
+            background: #222; border: 1px solid #444; border-radius: 6px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5); padding: 5px 0;
+            font-family: Arial, sans-serif; color: #ddd; font-size: 13px;
+        }
+        #gotot-context-menu.gotot-light-menu {
+            background: #fdfdfd; border-color: #ccc; color: #333;
+        }
+        .gotot-menu-item {
+            padding: 10px 15px; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+        }
+        .gotot-menu-item:hover { background: #d35400; color: #fff; }
+        .gotot-menu-version {
+            padding: 6px 15px; font-size: 10px; color: #777; border-top: 1px solid #444; margin-top: 5px; text-align: right;
+        }
+        #gotot-context-menu.gotot-light-menu .gotot-menu-version {
+            border-top-color: #eee; color: #888;
+        }
+
+        /* --- Toast Notification --- */
+        #gotot-toast {
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            background: rgba(211, 84, 0, 0.95); color: #fff; padding: 12px 24px;
+            border-radius: 30px; z-index: 999999; font-family: Arial, sans-serif;
+            font-size: 14px; font-weight: bold; box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            opacity: 0; transition: opacity 0.5s ease-in-out; pointer-events: none; text-align: center;
+        }
+
         /* --- Mobile UX pro lištu --- */
         li.gotot-mobile {
-            width: 32px; 
-            height: 32px; 
-            justify-content: center; 
-            margin-right: 5px;
-            /* Zákaz označování textu (lupy) a vyskakování systémových menu */
-            -webkit-user-select: none;
-            user-select: none;
-            -webkit-touch-callout: none;
+            width: 32px; height: 32px; justify-content: center; margin-right: 5px;
+            -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
         }
         li.gotot-mobile .goto-input { 
-            position: absolute !important; 
-            top: 0 !important; 
-            left: 0 !important; 
-            width: 100% !important; 
-            height: 100% !important; 
-            opacity: 0 !important; /* Políčko je 100% průhledné, ale sedí přímo přes lupu */
-            margin: 0 !important; 
-            padding: 0 !important; 
-            border: none !important; 
-            z-index: 10 !important; 
-            cursor: pointer !important;
-            -webkit-appearance: none !important;
+            position: absolute !important; top: 0 !important; left: 0 !important; 
+            width: 100% !important; height: 100% !important; opacity: 0 !important; 
+            margin: 0 !important; padding: 0 !important; border: none !important; 
+            z-index: 10 !important; cursor: pointer !important; -webkit-appearance: none !important;
         } 
         li.gotot-mobile .goto-btn { 
-            font-size: 18px; 
-            padding: 2px; 
-            margin: 0; 
-            z-index: 1; /* Lupa je vykreslena pod neviditelným políčkem */
-            pointer-events: none; /* Dotyky propadnou na input */
+            font-size: 18px; padding: 2px; margin: 0; z-index: 1; pointer-events: none; 
         }
     `;
     document.head.appendChild(styleEl);
 
     // --- Helpers ---
+    function parseCzechDate(dateStr) {
+        // Zvládne formát "3.června 2005 1:28" i "12. 2. 2022 5:58"
+        const regex = /(\d+)\.\s*([a-zA-ZáčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]+|\d+\.)\s+(\d{4})(?:\s*,?\s*(\d{1,2}:\d{2}(?::\d{2})?))?/;
+        const match = dateStr.match(regex);
+        if (!match) return 0;
+        
+        const day = parseInt(match[1], 10);
+        let monthStr = match[2].toLowerCase().replace('.', '').trim();
+        const year = parseInt(match[3], 10);
+        const timeStr = match[4] || "00:00:00";
+        
+        const months = {'ledna':0,'února':1,'března':2,'dubna':3,'května':4,'června':5,'července':6,'srpna':7,'září':8,'října':9,'listopadu':10,'prosince':11};
+        
+        let mon;
+        if (months[monthStr] !== undefined) {
+            mon = months[monthStr];
+        } else if (!isNaN(parseInt(monthStr, 10))) {
+            mon = parseInt(monthStr, 10) - 1; // 1-based na 0-based
+        } else {
+            return 0;
+        }
+
+        const timeParts = timeStr.split(':');
+        const h = parseInt(timeParts[0] || 0, 10);
+        const m = parseInt(timeParts[1] || 0, 10);
+        const s = parseInt(timeParts[2] || 0, 10);
+        
+        return new Date(year, mon, day, h, m, s).getTime();
+    }
+
     function formatCzechDate(dateObj) {
         const days = ['Neděle', 'Pondělí', 'Úterý', 'Středa', 'Čtvrtek', 'Pátek', 'Sobota'];
         const months = ['ledna', 'února', 'března', 'dubna', 'května', 'června', 'července', 'srpna', 'září', 'října', 'listopadu', 'prosince'];
@@ -112,6 +165,56 @@
         const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
         const dd = String(dateObj.getDate()).padStart(2, '0');
         return `${yyyy}${mm}${dd}-000000`;
+    }
+
+    function showToast(msg) {
+        const toast = document.createElement('div');
+        toast.id = 'gotot-toast';
+        toast.innerText = msg;
+        document.body.appendChild(toast);
+        setTimeout(() => { toast.style.opacity = '1'; }, 50);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 500);
+        }, 5000);
+    }
+
+    // --- Boundary Checking Logic ---
+    function checkBoundaries() {
+        const targetDateStr = sessionStorage.getItem('gotot_jump_target');
+        if (!targetDateStr) return;
+        sessionStorage.removeItem('gotot_jump_target');
+        
+        const targetTs = new Date(targetDateStr).getTime();
+        if (isNaN(targetTs)) return;
+
+        let newest = 0;
+        let oldest = Infinity;
+        
+        document.querySelectorAll('.listing .item .permalink a.date').forEach(dEl => {
+            const text = dEl.innerText || dEl.textContent;
+            const ts = parseCzechDate(text.trim());
+            if (ts > 0) {
+                if (ts > newest) newest = ts;
+                if (ts < oldest) oldest = ts;
+            }
+        });
+
+        if (oldest !== Infinity && newest !== 0) {
+            const pager = document.querySelector('.pager');
+            if (!pager) return; 
+            
+            const hasOlder = !!pager.querySelector('.older a, .oldest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Starší'));
+            const hasNewer = !!pager.querySelector('.newer a, .newest a') || Array.from(pager.querySelectorAll('a')).some(a => a.innerText.includes('Novější'));
+
+            const margin = 86400000; // 24h tolerance
+
+            if (targetTs < (oldest - margin) && !hasOlder) {
+                showToast("⏳ Klub v této době ještě neexistoval. Zobrazuji nejstarší dostupný záznam.");
+            } else if (targetTs > (newest + margin) && !hasNewer) {
+                showToast("⏳ Hledáte příliš v budoucnosti. Zobrazuji nejnovější dostupný záznam.");
+            }
+        }
     }
 
     // --- UI Management (The News Overlay) ---
@@ -135,6 +238,10 @@
                 </div>
             </div>`;
         document.body.appendChild(overlayEl);
+
+        if (localStorage.getItem('gotot_light_theme') === 'true') {
+            document.getElementById('gotot-modal').classList.add('gotot-light');
+        }
 
         document.getElementById('gotot-cancel-btn').addEventListener('click', closeOverlay);
     }
@@ -232,6 +339,9 @@
         const targetDate = new Date(targetDateStr);
         if (isNaN(targetDate.getTime())) return;
 
+        // Uložíme si cíl do paměti pro budoucí kontrolu hranic času
+        sessionStorage.setItem('gotot_jump_target', targetDateStr);
+
         const okounParam = getOkounDateParam(targetDate);
         const cleanBaseUrl = window.location.href.split('?')[0].split('#')[0];
         const finalUrl = `${cleanBaseUrl}?f=${okounParam}`;
@@ -251,10 +361,78 @@
         }
     }
 
+    // --- Custom Context Menu ---
+    function handleContextMenu(e, anchorLi) {
+        e.preventDefault();
+        
+        const existing = document.getElementById('gotot-context-menu');
+        if (existing) existing.remove();
+
+        const menu = document.createElement('div');
+        menu.id = 'gotot-context-menu';
+        
+        let x = e.pageX;
+        let y = e.pageY;
+        if ((x === undefined || x === 0) && e.changedTouches && e.changedTouches.length > 0) {
+            x = e.changedTouches[0].pageX;
+            y = e.changedTouches[0].pageY;
+        }
+        if (x === undefined || x === 0) {
+            const rect = anchorLi.getBoundingClientRect();
+            x = rect.left + window.scrollX;
+            y = rect.bottom + window.scrollY;
+        }
+        
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+
+        function renderMenuContent() {
+            const skip = localStorage.getItem('gotot_skip_overlay') === 'true';
+            const light = localStorage.getItem('gotot_light_theme') === 'true';
+            
+            if (light) menu.classList.add('gotot-light-menu');
+            else menu.classList.remove('gotot-light-menu');
+
+            menu.innerHTML = `
+                <div class="gotot-menu-item" id="gotot-menu-news">
+                    <span>Retro zprávy:</span> <strong style="color: ${skip ? '#c0392b' : '#27ae60'}">${skip ? 'VYP' : 'ZAP'}</strong>
+                </div>
+                <div class="gotot-menu-item" id="gotot-menu-theme">
+                    <span>Téma okna:</span> <strong style="color: #2980b9">${light ? 'SVĚTLÉ' : 'TMAVÉ'}</strong>
+                </div>
+                <div class="gotot-menu-version">GoToT v2.4.0</div>
+            `;
+            
+            document.getElementById('gotot-menu-news').onclick = (ev) => {
+                ev.stopPropagation();
+                localStorage.setItem('gotot_skip_overlay', !skip);
+                renderMenuContent();
+            };
+            document.getElementById('gotot-menu-theme').onclick = (ev) => {
+                ev.stopPropagation();
+                localStorage.setItem('gotot_light_theme', !light);
+                renderMenuContent();
+            };
+        }
+        
+        renderMenuContent();
+        document.body.appendChild(menu);
+
+        setTimeout(() => {
+            document.addEventListener('click', function clickOut(ev) {
+                if (menu && !menu.contains(ev.target)) {
+                    menu.remove();
+                    document.removeEventListener('click', clickOut);
+                }
+            });
+        }, 50);
+    }
+
     // --- Init ---
     function init() {
+        checkBoundaries();
+
         const pagerNavs = document.querySelectorAll('.pager > ul.nav:first-of-type');
-        
         pagerNavs.forEach(nav => {
             const li = document.createElement('li');
             li.className = 'goto-nav-item';
@@ -267,24 +445,18 @@
             const btn = document.createElement('button');
             btn.className = 'goto-btn';
             btn.innerHTML = '🔍';
-            btn.title = 'Pravé tl. (nebo dlouhý stisk) pro nastavení overlaye';
+            btn.title = 'Pravé tl. (nebo dlouhý stisk) pro nastavení skoků';
 
             const go = () => { if (input.value) performScan(input.value); };
 
-            // AUTO-JUMP po výběru data
             input.addEventListener('change', go);
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 
             if (isMobile) {
-                // MOBILNÍ LAYOUT: Přidáme speciální třídu, která zneviditelní input a zakáže označování lupy
                 li.classList.add('gotot-mobile');
-                
-                // Do lišty vložíme OBĚ věci. Neviditelný input bude sedět díky CSS přesně nad lupou.
                 li.appendChild(input);
                 li.appendChild(btn);
-
             } else {
-                // DESKTOP: Klasický vzhled vedle sebe
                 btn.addEventListener('click', (e) => { 
                     e.preventDefault(); 
                     go(); 
@@ -293,18 +465,8 @@
                 li.appendChild(btn);
             }
 
-            // NASTAVENÍ: Dlouhý stisk (nebo pravé tlačítko) kdekoli na prvku (na mobilu tedy na neviditelném inputu)
-            li.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                let skipOverlay = localStorage.getItem('gotot_skip_overlay') === 'true';
-                localStorage.setItem('gotot_skip_overlay', !skipOverlay);
-                
-                if (!skipOverlay) {
-                    alert('Mód rychlého skoku: ZAPNUTÝ\n\nSkript tě nyní přenese v čase rovnou a skryje retro zprávy z Hyeny.');
-                } else {
-                    alert('Mód rychlého skoku: VYPNUTÝ\n\nBěhem skoku se ti opět zobrazí okno se zprávami z Hyeny.');
-                }
-            });
+            // Napojení nového kontextového menu
+            li.addEventListener('contextmenu', (e) => handleContextMenu(e, li));
 
             nav.insertBefore(li, nav.firstChild);
         });
